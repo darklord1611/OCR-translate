@@ -1,6 +1,8 @@
 Install [tesseract](https://tesseract-ocr.github.io/tessdoc/Installation.html)
 
-Install [k6] (https://grafana.com/docs/k6/latest/set-up/install-k6/)
+Install [k6](https://grafana.com/docs/k6/latest/set-up/install-k6/)
+
+Install [go](https://go.dev/doc/install)
 
 
 ```sh
