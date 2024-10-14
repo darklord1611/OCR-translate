@@ -10,7 +10,7 @@ func TranslateFilter(text string) string {
 	// you can use "auto" for source language
 	// so, translator will detect language
 	result, _ := gt.Translate(text, "en", "vi")
-	fmt.Println(result)
+	fmt.Println("Translated successfully")
 	// Output: "Hola, Mundo!"
     return result
 }

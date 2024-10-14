@@ -3,7 +3,6 @@ package pdf
 
 import (
 	"fmt"
-	"github.com/google/uuid"
     gofpdf "github.com/jung-kurt/gofpdf"
 )
 
@@ -11,7 +10,7 @@ import (
 
 
 
-func ExportPDF(translatedText string) string {
+func ExportPDF(translatedText, jobID string) (string, error) {
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	pdf.AddPage()
 
@@ -21,14 +20,13 @@ func ExportPDF(translatedText string) string {
     pdf.MoveTo(0, 20)
     width, _ := pdf.GetPageSize()
     pdf.MultiCell(width, 10, translatedText, "", "", false)
-	new_uuid := uuid.New().String()
-    fmt.Println(new_uuid)
-	// err := pdf.OutputFileAndClose(fmt.Sprintf("./%s.pdf", new_uuid))
+    OutFilePath := fmt.Sprintf("./output/%s.pdf", jobID)
+	err := pdf.OutputFileAndClose(OutFilePath)
 
-    err := pdf.OutputFileAndClose("./output/sample.pdf")
+    // err := pdf.OutputFileAndClose("./output/sample.pdf")
 
 	if err != nil {
-        return fmt.Sprintf("export file err: %s", err.Error())
+        return "", fmt.Errorf("failed to export to pdf file: %v", err)
     }
-    return "Export file successfully"
+    return OutFilePath, nil
 }

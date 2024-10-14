@@ -3,15 +3,33 @@ package main
 import (
     "fmt"
     "net/http"
+    "log"
+    "time"
     "github.com/gin-gonic/gin"
     "backend/pkg/ocr"
     "backend/pkg/pdf"
     "backend/pkg/translation"
     "backend/models"
-
+    "github.com/google/uuid"
 )
 
+const numWorkers = 5
+
+var jobQueue = make(chan models.Job, 100) // Job queue channel with buffer size 100
+
+
 func main() {
+
+    // Initialize the Tesseract client
+    ocr.Initialize()
+    defer ocr.Cleanup() // Ensure the client is closed when the server shuts down
+
+    // Start workers to process jobs concurrently
+    for i := 0; i < numWorkers; i++ {
+        go worker(i, jobQueue)
+    }
+
+
     // Create a Gin router
     r := gin.Default()
 
@@ -37,22 +55,15 @@ func main() {
 
         // pipeline
 
-        job = models.Job{} {
+        job := models.Job{
             ImagePath:  imagePath,
-            JobID:      uuid.New().String()
+            JobID:      uuid.New().String(),
         }
 
-        originalText := ocr.OCRFilter(imagePath)
-        translatedText := translation.TranslateFilter(originalText)
-        result := pdf.ExportPDF(translatedText)
-
-        if result != "Export file successfully" {
-            c.String(http.StatusInternalServerError, result)
-            return
-        }
+        jobQueue <- job
 
         // Respond with a success message
-        c.String(http.StatusOK, fmt.Sprintf("'%s' uploaded successfully!", file.Filename))
+        c.JSON(200, gin.H{"message": "Job submitted", "jobID": job.JobID})
     })
 
     // Start the server on port 8080
@@ -61,15 +72,28 @@ func main() {
 
 
 
-func worker(id int, jobs <-chan Job) {
+func worker(id int, jobs <-chan models.Job) {
     for job := range jobs {
+        start_time := time.Now()
         log.Printf("Worker %d started job %s", id, job.JobID)
 
         // Perform the OCR, translation, and PDF generation here
-        processOCR(job.ImagePath)
+        originalText, err := ocr.OCRFilter(job.ImagePath)
+        if err != nil {
+            log.Printf("Job %s failed", id, job.JobID)
+        }
+        translatedText := translation.TranslateFilter(originalText)
+        result, err := pdf.ExportPDF(translatedText, job.JobID)
         // Additional steps...
+        if err != nil {
+            log.Printf("Job %s failed", id, job.JobID)
+        }
+
+        job.OutFilePath = result
 
         log.Printf("Worker %d finished job %s", id, job.JobID)
+        elapsed_time := time.Since(start_time)
+        log.Printf("Request took %v\n", elapsed_time)
     }
 }
 

@@ -5,3 +5,7 @@
 output/*
 
 !output/.gitkeep
+
+uploads/*
+
+!uploads/.gitkeep

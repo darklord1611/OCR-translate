@@ -3,9 +3,11 @@ import { sleep } from "k6";
 import { FormData } from "https://jslib.k6.io/formdata/0.0.2/index.js";
 import { check } from 'k6';
 
+
+// change how many users gonna request to the endpoint
 export const options = {
   vus: 1,
-  duration: "30s",
+  duration: "10s",
 };
 
 const img_temp = open("../data/sample.png", "b");
@@ -27,4 +29,6 @@ export default function () {
   check(res, {
     'status is 200': (r) => r.status === 200,
   });
+
+  sleep(1);
 }
