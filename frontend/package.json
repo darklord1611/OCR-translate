@@ -10,6 +10,9 @@
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
+    "@formkit/auto-animate": "^0.8.2",
+    "@nuxtjs/color-mode": "^3.5.2",
+    "daisyui": "^4.12.13",
     "nuxt": "^3.13.0",
     "nuxt-app": "file:",
     "vue": "latest",
