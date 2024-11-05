@@ -5,6 +5,7 @@ import (
 	"backend/pkg/ocr"
 	"backend/pkg/pdf"
 	"backend/pkg/translation"
+	"backend/pkg/segmentation"
 	"fmt"
 	"log"
 	"net/http"
@@ -16,7 +17,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const numWorkers = 5
+const numWorkers = 4
 
 var jobQueue = make(chan models.Job, 100) // Job queue channel with buffer size 100
 var jobStatusMap = make(map[string]string)
@@ -126,8 +127,12 @@ func worker(id int, jobs <-chan models.Job) {
 		jobStatusMap[job.JobID] = "in-progress"
 		jobStatusMutex.Unlock()
 
+		splitTime := time.Now()
+		segmentPaths := segmentation.SplitImage(job.ImagePath, job.JobID)
+		log.Printf("Image Spliting took %v\n", time.Since(splitTime))
 		// Perform the OCR, translation, and PDF generation here
-		originalText, err := ocr.OCRFilter(job.ImagePath)
+		OCRTime := time.Now()
+		originalText, err := ocr.OCRFilterConcurrent(segmentPaths)
 		if err != nil {
 			log.Printf("Job %s failed", id, job.JobID)
 			jobStatusMutex.Lock()
@@ -135,7 +140,10 @@ func worker(id int, jobs <-chan models.Job) {
 			jobStatusMutex.Unlock()
 			continue
 		}
+		log.Printf("OCR took %v\n", time.Since(OCRTime))
+		TranslationTime := time.Now()
 		translatedText := translation.TranslateFilter(originalText)
+		log.Printf("Translation took %v\n", time.Since(TranslationTime))
 		result, err := pdf.ExportPDF(translatedText, job.JobID)
 		if err != nil {
 			log.Printf("Job %s failed", id, job.JobID)
