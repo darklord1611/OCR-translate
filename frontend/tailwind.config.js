@@ -8,7 +8,7 @@ export default {
     require('daisyui'),
   ],
   daisyui: {
-    themes: ['light', 'dark', 'system', 'cupcake', 'synthwave']
+    themes: ['light', 'dark', 'system', 'bumblebee', 'synthwave', 'dim']
   },
 }
 

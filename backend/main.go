@@ -4,8 +4,8 @@ import (
 	"backend/models"
 	"backend/pkg/ocr"
 	"backend/pkg/pdf"
-	"backend/pkg/translation"
 	"backend/pkg/segmentation"
+	"backend/pkg/translation"
 	"fmt"
 	"log"
 	"net/http"
@@ -144,7 +144,11 @@ func worker(id int, jobs <-chan models.Job) {
 		TranslationTime := time.Now()
 		translatedText := translation.TranslateFilter(originalText)
 		log.Printf("Translation took %v\n", time.Since(TranslationTime))
-		result, err := pdf.ExportPDF(translatedText, job.JobID)
+		margins := map[string]float64{
+			"left":  30,
+			"top":   50,
+			"right": 30}
+		result, err := pdf.ExportPDF(translatedText, job.JobID, margins)
 		if err != nil {
 			log.Printf("Job %s failed", id, job.JobID)
 			jobStatusMutex.Lock()

@@ -65,10 +65,9 @@ func OCRFilterConcurrent(imagePaths []string) (string, error) {
 				errOccurred = err // capture the first error (optional)
 				return
 			}
-
 			// Ensure safe access to the shared result map
 			mu.Lock()
-			result = result + text
+			result = result + "     " + strings.TrimSpace(text) + "\n"
 			mu.Unlock()
 		}(path)
 	}

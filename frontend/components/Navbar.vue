@@ -28,8 +28,8 @@
 <script setup lang="ts">
 const colorMode = useColorMode();
 const themes = {
-    light: 'light',
-    dark: 'synthwave',
+    light: 'bumblebee',
+    dark: 'dim',
 }
 
 const toggleTheme = () => {
