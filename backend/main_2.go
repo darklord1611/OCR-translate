@@ -16,11 +16,47 @@ import (
 	"github.com/google/uuid"
 )
 
-const numWorkers = 5
 
-var ocrQueue = make(chan models.Job, 100)        // OCR queue channel
-var translationQueue = make(chan models.Job, 100) // Translation queue channel
-var pdfQueue = make(chan models.Job, 100)         // PDF queue channel
+var (
+	totalResponseTime time.Duration
+	totalJobs         int
+	averageMutex      = &sync.Mutex{}
+)
+
+// Function to update average response time
+func updateAverageResponseTime(responseTime time.Duration) {
+	averageMutex.Lock()
+	defer averageMutex.Unlock()
+
+	totalResponseTime += responseTime
+	totalJobs++
+}
+
+// Function to retrieve the average response time
+func getAverageResponseTime() time.Duration {
+	averageMutex.Lock()
+	defer averageMutex.Unlock()
+
+	if totalJobs == 0 {
+		return 0
+	}
+	return totalResponseTime / time.Duration(totalJobs)
+}
+
+
+
+// CONSTANTS
+const numWorkers = 5
+var margins = map[string]float64{
+	"left":  30,
+	"top":   50,
+	"right": 30}
+
+
+
+var ocrQueue = make(chan *models.Job, 100)        // OCR queue channel
+var translationQueue = make(chan *models.Job, 100) // Translation queue channel
+var pdfQueue = make(chan *models.Job, 100)         // PDF queue channel
 
 var jobStatusMap = make(map[string]string)
 var jobStatusMutex = &sync.Mutex{}
@@ -32,7 +68,7 @@ func main() {
 	defer ocr.Cleanup() // Ensure the client is closed when the server shuts down
 
 	// Start workers for each queue
-	for i := 0; i < numWorkers * 2; i++ {
+	for i := 0; i < numWorkers; i++ {
 		go ocrWorker(i, ocrQueue)
 	}
 
@@ -81,9 +117,10 @@ func main() {
 		jobID := uuid.New().String()
 
 		// Initialize job
-		job := models.Job{
+		job := &models.Job{
 			ImagePath: imagePath,
 			JobID:     jobID,
+			SubmittedAt: time.Now(),
 		}
 
 		// Initialize job status to "pending"
@@ -123,12 +160,18 @@ func main() {
 		c.File(filePath)
 	})
 
+	// Endpoint to get average response time
+	r.GET("/average-response-time", func(c *gin.Context) {
+		avgTime := getAverageResponseTime()
+		c.JSON(http.StatusOK, gin.H{"average_response_time": avgTime.Seconds()})
+	})
+
 	// Start the server on port 8080
 	r.Run(":8081")
 }
 
 // Worker function for OCR processing
-func ocrWorker(id int, jobs <-chan models.Job) {
+func ocrWorker(id int, jobs <-chan *models.Job) {
 	for job := range jobs {
 		start_time := time.Now()
 		log.Printf("OCR Worker %d started job %s", id, job.JobID)
@@ -156,7 +199,7 @@ func ocrWorker(id int, jobs <-chan models.Job) {
 }
 
 // Worker function for Translation processing
-func translationWorker(id int, jobs <-chan models.Job) {
+func translationWorker(id int, jobs <-chan *models.Job) {
 	for job := range jobs {
 		start_time := time.Now()
 		log.Printf("Translation Worker %d started job %s", id, job.JobID)
@@ -178,7 +221,7 @@ func translationWorker(id int, jobs <-chan models.Job) {
 }
 
 // Worker function for PDF generation
-func pdfWorker(id int, jobs <-chan models.Job) {
+func pdfWorker(id int, jobs <-chan *models.Job) {
 	for job := range jobs {
 		start_time := time.Now()
 		log.Printf("PDF Worker %d started job %s", id, job.JobID)
@@ -189,7 +232,7 @@ func pdfWorker(id int, jobs <-chan models.Job) {
 		jobStatusMutex.Unlock()
 
 		// Generate PDF
-		result, err := pdf.ExportPDF(job.TranslatedText, job.JobID)
+		result, err := pdf.ExportPDF(job.TranslatedText, job.JobID, margins)
 		if err != nil {
 			log.Printf("Job %s failed during PDF generation", job.JobID)
 			jobStatusMutex.Lock()
@@ -201,12 +244,16 @@ func pdfWorker(id int, jobs <-chan models.Job) {
 		elapsed_time := time.Since(start_time)
 		log.Printf("PDF generation took %v\n", elapsed_time)
 
-		job.OutFilePath = result
-
 		// Update job status to "completed"
 		jobStatusMutex.Lock()
 		jobStatusMap[job.JobID] = "completed"
 		jobStatusMutex.Unlock()
+
+		job.OutFilePath = result
+		job.CompletedAt = time.Now()
+		job.ResponseTime = job.CompletedAt.Sub(job.SubmittedAt)
+		// Update average response time
+		updateAverageResponseTime(job.ResponseTime)
 
 		log.Printf("PDF Worker %d finished job %s", id, job.JobID)
 	}

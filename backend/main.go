@@ -17,9 +17,37 @@ import (
 	"github.com/google/uuid"
 )
 
+var (
+	totalResponseTime time.Duration
+	totalJobs         int
+	averageMutex      = &sync.Mutex{}
+)
+
+// Function to update average response time
+func updateAverageResponseTime(responseTime time.Duration) {
+	averageMutex.Lock()
+	defer averageMutex.Unlock()
+
+	totalResponseTime += responseTime
+	totalJobs++
+}
+
+// Function to retrieve the average response time
+func getAverageResponseTime() time.Duration {
+	averageMutex.Lock()
+	defer averageMutex.Unlock()
+
+	if totalJobs == 0 {
+		return 0
+	}
+	return totalResponseTime / time.Duration(totalJobs)
+}
+
+
+
 const numWorkers = 4
 
-var jobQueue = make(chan models.Job, 100) // Job queue channel with buffer size 100
+var jobQueue = make(chan *models.Job, 100) // Job queue channel with buffer size 100
 var jobStatusMap = make(map[string]string)
 var jobStatusMutex = &sync.Mutex{}
 
@@ -39,7 +67,7 @@ func main() {
 
 	// Config CORS middleware
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:3000"}, // Adjust this to match your frontend's origin
+		AllowOrigins:     []string{"*"}, // Adjust this to match your frontend's origin
 		AllowMethods:     []string{"GET", "POST"},
 		AllowHeaders:     []string{"Origin", "Content-Type"},
 		ExposeHeaders:    []string{"Content-Length"},
@@ -72,9 +100,10 @@ func main() {
 
 		// pipeline
 
-		job := models.Job{
+		job := &models.Job{
 			ImagePath: imagePath,
 			JobID:     jobID,
+			SubmittedAt: time.Now(),
 		}
 
 		jobQueue <- job
@@ -112,11 +141,17 @@ func main() {
 		c.File(filePath)
 	})
 
+	// Endpoint to get average response time
+	r.GET("/average-response-time", func(c *gin.Context) {
+		avgTime := getAverageResponseTime()
+		c.JSON(http.StatusOK, gin.H{"average_response_time": avgTime.Seconds()})
+	})
+
 	// Start the server on port 8080
 	r.Run(":8080")
 }
 
-func worker(id int, jobs <-chan models.Job) {
+func worker(id int, jobs <-chan *models.Job) {
 	for job := range jobs {
 		start_time := time.Now()
 		log.Printf("Worker %d started job %s", id, job.JobID)
@@ -139,6 +174,7 @@ func worker(id int, jobs <-chan models.Job) {
 			jobStatusMutex.Unlock()
 			continue
 		}
+
 		log.Printf("OCR took %v\n", time.Since(OCRTime))
 		TranslationTime := time.Now()
 		translatedText := translation.TranslateFilter(originalText)
@@ -156,15 +192,19 @@ func worker(id int, jobs <-chan models.Job) {
 			continue
 		}
 
-		elapsed_time = time.Since(start_time)
+		elapsed_time := time.Since(start_time)
 		log.Printf("PDF generation took %v\n", elapsed_time)
-
-		job.OutFilePath = result
 
 		// Update job status to "completed"
 		jobStatusMutex.Lock()
 		jobStatusMap[job.JobID] = "completed"
 		jobStatusMutex.Unlock()
+
+		job.OutFilePath = result
+		job.CompletedAt = time.Now()
+		job.ResponseTime = job.CompletedAt.Sub(job.SubmittedAt)
+		// Update average response time
+		updateAverageResponseTime(job.ResponseTime)
 
 		log.Printf("Worker %d finished job %s", id, job.JobID)
 	}
