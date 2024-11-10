@@ -1,9 +1,8 @@
 Install [tesseract](https://tesseract-ocr.github.io/tessdoc/Installation.html)
 
-Install [k6](https://grafana.com/docs/k6/latest/set-up/install-k6/)
-
 Install [go](https://go.dev/doc/install)
 
+Install [locust](https://locust.io/)
 
 ```sh
 # Cài đặt các gói liên quan
@@ -15,7 +14,12 @@ $ go run main.go
 
 ```sh
 # Benchmark
-$ k6 run benchmark/script.js
+$ pip install locust
 
+$ cd benchmark
+$ locust
+
+# Go to http://localhost:8089
+# Pick number of max users, ramp-up user rate, host, load time
 ```
 
