@@ -2,21 +2,20 @@ package main
 
 import (
 	"backend/models"
-	"backend/pkg/ocr"
-	"backend/pkg/pdf"
-	"backend/pkg/segmentation"
-	"backend/pkg/translation"
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"sync"
 	"time"
 	"os"
-
+	"encoding/json"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
 )
 
 var (
@@ -47,12 +46,6 @@ func getAverageResponseTime() time.Duration {
 
 
 
-const numWorkers = 4
-
-var jobQueue = make(chan *models.Job, 100) // Job queue channel with buffer size 100
-var jobStatusMap = make(map[string]string)
-var jobStatusMutex = &sync.Mutex{}
-
 func main() {
 	// Load environment variables
 	err := godotenv.Load()
@@ -60,14 +53,20 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
-	// Initialize the Tesseract client
-	ocr.Initialize()
-	defer ocr.Cleanup() // Ensure the client is closed when the server shuts down
+	conn, ch, err := initRabbitMQ()
+	failOnError(err, "Failed to connect to RabbitMQ")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	redis_ctx := context.Background()
 
-	// Start workers to process jobs concurrently
-	for i := 0; i < numWorkers; i++ {
-		go worker(i, jobQueue)
-	}
+	// Initialize Redis client
+	rdb := initRedis()
+
+
+	defer ch.Close()
+	defer conn.Close()
+	defer cancel()
+
+
 
 	// Create a Gin router
 	r := gin.Default()
@@ -113,12 +112,28 @@ func main() {
 			SubmittedAt: time.Now(),
 		}
 
-		jobQueue <- job
+		body, err := json.Marshal(job)
 
-		// Initialize job status to "pending"
-		jobStatusMutex.Lock()
-		jobStatusMap[job.JobID] = "pending"
-		jobStatusMutex.Unlock()
+		err = ch.PublishWithContext(ctx,
+			"",     // exchange
+			"ocr-queue", // routing key
+			false,  // mandatory
+			false,  // immediate
+			amqp.Publishing{
+				ContentType: "encoding/json",
+				Body:       body,
+			})
+	
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to publish message"})
+			return
+		}
+
+		err = rdb.Set(redis_ctx, job.JobID, "submitted", 0).Err()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to set status"})
+			return
+		}
 
 		// Respond with a success message
 		c.JSON(200, gin.H{"message": "Job submitted", "jobID": jobID})
@@ -127,13 +142,16 @@ func main() {
 	// Status endpoint
 	r.GET("/status/:jobID", func(c *gin.Context) {
 		jobID := c.Param("jobID")
-		jobStatusMutex.Lock()
-		status, exists := jobStatusMap[jobID]
-		jobStatusMutex.Unlock()
-		if !exists {
+		status, err := rdb.Get(redis_ctx, jobID).Result()
+
+		if err == redis.Nil {
 			c.JSON(http.StatusNotFound, gin.H{"status": "not found"})
 			return
+		} else if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get status"})
+			return
 		}
+
 		c.JSON(http.StatusOK, gin.H{"status": status})
 	})
 	// Serve files normally
@@ -149,70 +167,64 @@ func main() {
 	})
 
 	// Endpoint to get average response time
-	r.GET("/average-response-time", func(c *gin.Context) {
-		avgTime := getAverageResponseTime()
-		c.JSON(http.StatusOK, gin.H{"average_response_time": avgTime.Seconds()})
-	})
+	// r.GET("/average-response-time", func(c *gin.Context) {
+	// 	avgTime := getAverageResponseTime()
+	// 	c.JSON(http.StatusOK, gin.H{"average_response_time": avgTime.Seconds()})
+	// })
 
 	// Start the server on port 8080
-	r.Run(":8080")
+	r.Run(":8082")
 }
 
-func worker(id int, jobs <-chan *models.Job) {
-	for job := range jobs {
-		start_time := time.Now()
-		log.Printf("Worker %d started job %s", id, job.JobID)
-
-		// Update job status to "in-progress"
-		jobStatusMutex.Lock()
-		jobStatusMap[job.JobID] = "in-progress"
-		jobStatusMutex.Unlock()
-
-		splitTime := time.Now()
-		segmentPaths := segmentation.SplitImage(job.ImagePath, job.JobID)
-		log.Printf("Image Spliting took %v\n", time.Since(splitTime))
-		// Perform the OCR, translation, and PDF generation here
-		OCRTime := time.Now()
-		originalText, err := ocr.OCRFilterConcurrent(segmentPaths)
-		if err != nil {
-			log.Printf("Job %s failed", id, job.JobID)
-			jobStatusMutex.Lock()
-			jobStatusMap[job.JobID] = "failed"
-			jobStatusMutex.Unlock()
-			continue
-		}
-
-		log.Printf("OCR took %v\n", time.Since(OCRTime))
-		TranslationTime := time.Now()
-		translatedText := translation.TranslateFilter(originalText)
-		log.Printf("Translation took %v\n", time.Since(TranslationTime))
-		margins := map[string]float64{
-			"left":  30,
-			"top":   50,
-			"right": 30}
-		result, err := pdf.ExportPDF(translatedText, job.JobID, margins)
-		if err != nil {
-			log.Printf("Job %s failed", id, job.JobID)
-			jobStatusMutex.Lock()
-			jobStatusMap[job.JobID] = "failed"
-			jobStatusMutex.Unlock()
-			continue
-		}
-
-		elapsed_time := time.Since(start_time)
-		log.Printf("PDF generation took %v\n", elapsed_time)
-
-		// Update job status to "completed"
-		jobStatusMutex.Lock()
-		jobStatusMap[job.JobID] = "completed"
-		jobStatusMutex.Unlock()
-
-		job.OutFilePath = result
-		job.CompletedAt = time.Now()
-		job.ResponseTime = job.CompletedAt.Sub(job.SubmittedAt)
-		// Update average response time
-		updateAverageResponseTime(job.ResponseTime)
-
-		log.Printf("Worker %d finished job %s", id, job.JobID)
+func failOnError(err error, msg string) {
+	if err != nil {
+		log.Panicf("%s: %s", msg, err)
 	}
+}
+
+
+func initRabbitMQ() (*amqp.Connection, *amqp.Channel, error) {
+	conn, err := amqp.Dial(os.Getenv("RABBITMQ_CONNECTION"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+	}
+
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to open a channel: %w", err)
+	}
+
+	q, err := ch.QueueDeclare(
+		"translation-queue", // name
+		true,   // durable
+		false,   // delete when unused
+		false,   // exclusive
+		false,   // no-wait
+		nil,     // arguments
+	)
+	fmt.Println(q.Name)
+
+	failOnError(err, "Failed to declare translation queue")
+
+	q, err = ch.QueueDeclare(
+		"ocr-queue", // name
+		true,   // durable
+		false,   // delete when unused
+		false,   // exclusive
+		false,   // no-wait
+		nil,     // arguments
+	)
+	failOnError(err, "Failed to declare ocr queue")
+
+	return conn, ch, nil
+}
+
+func initRedis() *redis.Client {
+	rdb := redis.NewClient(&redis.Options{
+        Addr:     os.Getenv("REDIS_CONNECTION"),
+        Password: "", // no password set
+        DB:       0,  // use default DB
+    })
+
+	return rdb
 }

@@ -1,0 +1,29 @@
+version: '3.8'  # Specify the version of Docker Compose
+
+services:
+  # RabbitMQ Service
+  rabbitmq:
+    image: rabbitmq:4.0-management  # Includes the RabbitMQ Management plugin
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"     # RabbitMQ default port
+      - "15672:15672"   # RabbitMQ Management UI port
+    environment:
+      RABBITMQ_DEFAULT_USER: user     # Default RabbitMQ username
+      RABBITMQ_DEFAULT_PASS: password # Default RabbitMQ password
+    networks:
+      - app-network
+
+  # Redis Service
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"  # Redis default port
+    networks:
+      - app-network
+
+# Define a shared network for the services
+networks:
+  app-network:
+    driver: bridge

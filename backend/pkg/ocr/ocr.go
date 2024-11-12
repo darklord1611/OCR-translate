@@ -27,6 +27,22 @@ func Cleanup() {
 	fmt.Println("No explicit cleanup needed, sync.Pool handles cleanup")
 }
 
+func OneShotOCR(imagePath string) (string, error) {
+	client := gosseract.NewClient()
+	defer client.Close()
+	err := client.SetImage(imagePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to set image: %v", err)
+	}
+
+	text, err := client.Text()
+	if err != nil {
+		return "", fmt.Errorf("failed to extract text: %v", err)
+	}
+
+	return strings.ReplaceAll(text, "\n", ""), nil
+}
+
 // OCRFilter processes OCR on a single image
 func OCRFilter(imagePath string) (string, error) {
 	// Get a Tesseract client from the pool
