@@ -1,15 +1,19 @@
 package main
 
 import (
+	"backend/models"
+	"backend/pkg/pdf"
+	"backend/pkg/translation"
+	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
-	amqp "github.com/rabbitmq/amqp091-go"
-	"encoding/json"
-	"backend/pkg/translation"
-	"backend/pkg/pdf"
-	"backend/models"
+	"time"
+
 	"github.com/joho/godotenv"
+	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/redis/go-redis/v9"
 )
 
 var margins = map[string]float64{
@@ -25,7 +29,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
-	
+
 	conn, err := connectRabbitMQ(os.Getenv("RABBITMQ_CONNECTION"))
 	failOnError(err, "Failed to connect to RabbitMQ")
 	defer conn.Close()
@@ -43,7 +47,6 @@ func main() {
 	msgs, err := consumeMessage(channel, translate_queue.Name)
 	failOnError(err, "Failed to register a consumer")
 
-
 	var forever chan struct{}
 
 	go func() {
@@ -57,15 +60,13 @@ func main() {
 				log.Printf("Failed to translate: %v", err)
 			}
 			rdb.Set(redis_ctx, job.JobID, "completed", 0)
-			log.Printf("OutFilePath: %s", filePath)
+			fmt.Println("OutFilePath:", filePath)
 		}
 	}()
 
 	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
 	<-forever
 }
-
-
 
 func failOnError(err error, msg string) {
 	if err != nil {
@@ -83,14 +84,13 @@ func connectRabbitMQ(RABBITMQ_CONNECTION string) (*amqp.Connection, error) {
 
 func initRedis() *redis.Client {
 	rdb := redis.NewClient(&redis.Options{
-        Addr:     os.Getenv("REDIS_CONNECTION"),
-        Password: "", // no password set
-        DB:       0,  // use default DB
-    })
+		Addr:     os.Getenv("REDIS_CONNECTION"),
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
 
 	return rdb
 }
-
 
 func initQueue(channel *amqp.Channel, queueName string) (amqp.Queue, error) {
 	queue, err := channel.QueueDeclare(
@@ -141,6 +141,11 @@ func consumeMessage(channel *amqp.Channel, queueName string) (<-chan amqp.Delive
 }
 
 func processMessage(job *models.Job) (string, error) {
+	startTime := time.Now()
+	if job.ExtractedText == "" {
+		return "", fmt.Errorf("Please provide image with text")
+	}
+
 	translatedText := translation.TranslateFilter(job.ExtractedText)
 	job.TranslatedText = translatedText
 
@@ -148,8 +153,8 @@ func processMessage(job *models.Job) (string, error) {
 	if err != nil {
 		return OutFilePath, fmt.Errorf("failed to generate PDF: %w", err)
 	}
-	
+	elapsedTime := time.Since(startTime)
+	fmt.Println("Translation took:", elapsedTime)
+	job.ResponseTime += elapsedTime
 	return OutFilePath, nil
 }
-
-

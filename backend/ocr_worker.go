@@ -1,17 +1,18 @@
 package main
 
-
 import (
+	"backend/models"
+	"backend/pkg/ocr"
+	"backend/pkg/segmentation"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
-	amqp "github.com/rabbitmq/amqp091-go"
-	"encoding/json"
-	"backend/pkg/ocr"
-	"backend/models"
-	"github.com/joho/godotenv"
-)
+	"time"
 
+	"github.com/joho/godotenv"
+	amqp "github.com/rabbitmq/amqp091-go"
+)
 
 func main() {
 	// Load environment variables
@@ -19,7 +20,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
-	
+
 	conn, err := connectRabbitMQ(os.Getenv("RABBITMQ_CONNECTION"))
 	failOnError(err, "Failed to connect to RabbitMQ")
 	defer conn.Close()
@@ -59,7 +60,7 @@ func main() {
 			new_msg, err := json.Marshal(job)
 			failOnError(err, "Failed to marshal job")
 			req_count++
-			log.Printf("Processed %dth requests", req_count)
+			fmt.Println("Processed", req_count, "th requests")
 			publishMessage(channel, "translation-queue", new_msg)
 		}
 	}()
@@ -67,8 +68,6 @@ func main() {
 	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
 	<-forever
 }
-
-
 
 func failOnError(err error, msg string) {
 	if err != nil {
@@ -83,7 +82,6 @@ func connectRabbitMQ(RABBITMQ_CONNECTION string) (*amqp.Connection, error) {
 	}
 	return conn, nil
 }
-
 
 func initQueue(channel *amqp.Channel, queueName string) (amqp.Queue, error) {
 	queue, err := channel.QueueDeclare(
@@ -134,13 +132,18 @@ func consumeMessage(channel *amqp.Channel, queueName string) (<-chan amqp.Delive
 }
 
 func processMessage(job *models.Job) error {
+	startTime := time.Now()
+	segmentPaths := segmentation.SplitImage(job.ImagePath, job.JobID)
 
-	text, err := ocr.OneShotOCR(job.ImagePath)
+	text, err := ocr.OCRFilterConcurrent(segmentPaths)
+
+	// text, err := ocr.OneShotOCR(job.ImagePath)
 	if err != nil {
 		return fmt.Errorf("failed to process image: %w", err)
 	}
 	job.ExtractedText = text
+	elapsedTime := time.Since(startTime)
+	fmt.Println("Process image took:", elapsedTime)
+	job.ResponseTime = elapsedTime
 	return nil
 }
-
-

@@ -45,8 +45,6 @@ func getAverageResponseTime() time.Duration {
 	return totalResponseTime / time.Duration(totalJobs)
 }
 
-
-
 const numWorkers = 4
 
 var jobQueue = make(chan *models.Job, 100) // Job queue channel with buffer size 100

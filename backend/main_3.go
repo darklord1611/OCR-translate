@@ -3,48 +3,46 @@ package main
 import (
 	"backend/models"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
-	"os"
-	"encoding/json"
-	amqp "github.com/rabbitmq/amqp091-go"
+
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/redis/go-redis/v9"
 )
 
 var (
-	totalResponseTime time.Duration
-	totalJobs         int
-	averageMutex      = &sync.Mutex{}
+	averageResponseTime time.Duration
+	totalJobs           int
+	averageMutex        = &sync.Mutex{}
 )
 
-// Function to update average response time
 func updateAverageResponseTime(responseTime time.Duration) {
 	averageMutex.Lock()
 	defer averageMutex.Unlock()
 
-	totalResponseTime += responseTime
+	if totalJobs == 0 {
+		averageResponseTime = responseTime
+	} else {
+		averageResponseTime = (averageResponseTime*time.Duration(totalJobs) + responseTime) / time.Duration(totalJobs+1)
+	}
 	totalJobs++
 }
 
-// Function to retrieve the average response time
 func getAverageResponseTime() time.Duration {
 	averageMutex.Lock()
 	defer averageMutex.Unlock()
 
-	if totalJobs == 0 {
-		return 0
-	}
-	return totalResponseTime / time.Duration(totalJobs)
+	return averageResponseTime
 }
-
-
 
 func main() {
 	// Load environment variables
@@ -61,12 +59,9 @@ func main() {
 	// Initialize Redis client
 	rdb := initRedis()
 
-
 	defer ch.Close()
 	defer conn.Close()
 	defer cancel()
-
-
 
 	// Create a Gin router
 	r := gin.Default()
@@ -107,23 +102,23 @@ func main() {
 		// pipeline
 
 		job := &models.Job{
-			ImagePath: imagePath,
-			JobID:     jobID,
+			ImagePath:   imagePath,
+			JobID:       jobID,
 			SubmittedAt: time.Now(),
 		}
 
 		body, err := json.Marshal(job)
 
 		err = ch.PublishWithContext(ctx,
-			"",     // exchange
+			"",          // exchange
 			"ocr-queue", // routing key
-			false,  // mandatory
-			false,  // immediate
+			false,       // mandatory
+			false,       // immediate
 			amqp.Publishing{
 				ContentType: "encoding/json",
-				Body:       body,
+				Body:        body,
 			})
-	
+
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to publish message"})
 			return
@@ -167,10 +162,10 @@ func main() {
 	})
 
 	// Endpoint to get average response time
-	// r.GET("/average-response-time", func(c *gin.Context) {
-	// 	avgTime := getAverageResponseTime()
-	// 	c.JSON(http.StatusOK, gin.H{"average_response_time": avgTime.Seconds()})
-	// })
+	r.GET("/average-response-time", func(c *gin.Context) {
+		avgTime := getAverageResponseTime()
+		c.JSON(http.StatusOK, gin.H{"average_response_time": avgTime.Seconds()})
+	})
 
 	// Start the server on port 8080
 	r.Run(":8082")
@@ -181,7 +176,6 @@ func failOnError(err error, msg string) {
 		log.Panicf("%s: %s", msg, err)
 	}
 }
-
 
 func initRabbitMQ() (*amqp.Connection, *amqp.Channel, error) {
 	conn, err := amqp.Dial(os.Getenv("RABBITMQ_CONNECTION"))
@@ -196,11 +190,11 @@ func initRabbitMQ() (*amqp.Connection, *amqp.Channel, error) {
 
 	q, err := ch.QueueDeclare(
 		"translation-queue", // name
-		true,   // durable
-		false,   // delete when unused
-		false,   // exclusive
-		false,   // no-wait
-		nil,     // arguments
+		true,                // durable
+		false,               // delete when unused
+		false,               // exclusive
+		false,               // no-wait
+		nil,                 // arguments
 	)
 	fmt.Println(q.Name)
 
@@ -208,11 +202,11 @@ func initRabbitMQ() (*amqp.Connection, *amqp.Channel, error) {
 
 	q, err = ch.QueueDeclare(
 		"ocr-queue", // name
-		true,   // durable
-		false,   // delete when unused
-		false,   // exclusive
-		false,   // no-wait
-		nil,     // arguments
+		true,        // durable
+		false,       // delete when unused
+		false,       // exclusive
+		false,       // no-wait
+		nil,         // arguments
 	)
 	failOnError(err, "Failed to declare ocr queue")
 
@@ -221,10 +215,10 @@ func initRabbitMQ() (*amqp.Connection, *amqp.Channel, error) {
 
 func initRedis() *redis.Client {
 	rdb := redis.NewClient(&redis.Options{
-        Addr:     os.Getenv("REDIS_CONNECTION"),
-        Password: "", // no password set
-        DB:       0,  // use default DB
-    })
+		Addr:     os.Getenv("REDIS_CONNECTION"),
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
 
 	return rdb
 }

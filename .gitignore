@@ -27,3 +27,5 @@ go.work.sum
 .vscode
 
 backend/segments/
+
+backend/benchmark/env
