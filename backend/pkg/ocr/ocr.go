@@ -76,7 +76,7 @@ func OCRFilterConcurrent(imagePaths []string) (string, error) {
 		go func(imgPath string) {
 			defer wg.Done()
 
-			text, err := OneShotOCR(imgPath)
+			text, err := OCRFilter(imgPath)
 			if err != nil {
 				errOccurred = err // capture the first error (optional)
 				return

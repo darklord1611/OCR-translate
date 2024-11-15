@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 )
 
+
 var (
 	totalResponseTime time.Duration
 	totalJobs         int
@@ -42,12 +43,16 @@ func getAverageResponseTime() time.Duration {
 	return totalResponseTime / time.Duration(totalJobs)
 }
 
+
+
 // CONSTANTS
 const numWorkers = 5
 var margins = map[string]float64{
 	"left":  30,
 	"top":   50,
 	"right": 30}
+
+
 
 var ocrQueue = make(chan *models.Job, 100)        // OCR queue channel
 var translationQueue = make(chan *models.Job, 100) // Translation queue channel

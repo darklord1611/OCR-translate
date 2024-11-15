@@ -12,7 +12,6 @@ def _get_image_part(file_path):
 
 class QuickstartUser(HttpUser):
     wait_time = between(1, 5)
-    test_file = "/home/duyphong/Downloads/test1.png"
 
     @task
     def test_upload(self):
@@ -23,7 +22,7 @@ class QuickstartUser(HttpUser):
         }
         
         files = {
-            "file": _get_image_part(self.test_file)
+            "file": _get_image_part("/teamspace/studios/this_studio/OCR-translate/backend/data/sample.png")
         }
 
         self.client.post("/upload", data=payload, files=files)
