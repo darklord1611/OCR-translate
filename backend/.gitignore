@@ -6,6 +6,10 @@ output/*
 
 !output/.gitkeep
 
+logs/*
+
+!logs/.gitkeep
+
 learning_rabbitmq
 
 uploads/*

@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"context"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"encoding/json"
 	"backend/pkg/translation"
 	"backend/pkg/pdf"
 	"backend/models"
 	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
 )
 
 var margins = map[string]float64{
