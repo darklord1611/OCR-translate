@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"encoding/json"
 	"backend/pkg/ocr"
+	"backend/pkg/segmentation"
 	"backend/models"
 	"github.com/joho/godotenv"
 )
@@ -19,8 +21,15 @@ func main() {
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
+
+	mode := "CLIENT_POOL"
+
+	if mode == "CLIENT_POOL" {
+		ocr.Initialize()
+		defer ocr.Cleanup()
+	}
 	
-	conn, err := connectRabbitMQ(os.Getenv("RABBITMQ_CONNECTION"))
+	conn, err := connectRabbitMQ()
 	failOnError(err, "Failed to connect to RabbitMQ")
 	defer conn.Close()
 
@@ -47,11 +56,12 @@ func main() {
 
 	go func() {
 		for d := range msgs {
+			start_time := time.Now()
 			var job models.Job
 			err := json.Unmarshal(d.Body, &job)
 			failOnError(err, "Failed to unmarshal job")
 
-			err = processMessage(&job)
+			err = processMessage(&job, mode)
 			if err != nil {
 				log.Printf("Failed to process image: %v", err)
 			}
@@ -61,6 +71,7 @@ func main() {
 			req_count++
 			log.Printf("Processed %dth requests", req_count)
 			publishMessage(channel, "translation-queue", new_msg)
+			log.Printf("OCR job completed in %v", time.Since(start_time))
 		}
 	}()
 
@@ -76,8 +87,8 @@ func failOnError(err error, msg string) {
 	}
 }
 
-func connectRabbitMQ(RABBITMQ_CONNECTION string) (*amqp.Connection, error) {
-	conn, err := amqp.Dial(RABBITMQ_CONNECTION)
+func connectRabbitMQ() (*amqp.Connection, error) {
+	conn, err := amqp.Dial(os.Getenv("RABBITMQ_CONNECTION"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
 	}
@@ -133,9 +144,20 @@ func consumeMessage(channel *amqp.Channel, queueName string) (<-chan amqp.Delive
 	return msgs, nil
 }
 
-func processMessage(job *models.Job) error {
+func processMessage(job *models.Job, mode string) error {
 
-	text, err := ocr.OneShotOCR(job.ImagePath)
+	var text string
+	var err error
+	if mode == "SPLIT_IMAGE" {
+		segmentPaths := segmentation.SplitImage(job.ImagePath, job.JobID)
+		text, err = ocr.OCRFilterConcurrent(segmentPaths)
+	} else if mode == "ONE_SHOT" {
+		text, err = ocr.OneShotOCR(job.ImagePath)
+	} else if mode == "CLIENT_POOL" {
+		text, err = ocr.OCRFilter(job.ImagePath)
+	}
+
+
 	if err != nil {
 		return fmt.Errorf("failed to process image: %w", err)
 	}

@@ -24,24 +24,41 @@ var (
 	averageMutex      = &sync.Mutex{}
 )
 
-// Function to update average response time
-func updateAverageResponseTime(responseTime time.Duration) {
-	averageMutex.Lock()
-	defer averageMutex.Unlock()
+var redisClient *redis.Client
+var redisCtx = context.Background()
 
-	totalResponseTime += responseTime
-	totalJobs++
-}
 
-// Function to retrieve the average response time
-func getAverageResponseTime() time.Duration {
-	averageMutex.Lock()
-	defer averageMutex.Unlock()
 
-	if totalJobs == 0 {
-		return 0
+func calculateAverageResponseTime() (float64, error) {
+	keys, err := redisClient.Keys(redisCtx, "*").Result()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get job keys: %v", err)
 	}
-	return totalResponseTime / time.Duration(totalJobs)
+
+	var totalTime int64
+	var jobCount int64
+
+	for _, key := range keys {
+		responseTime, err := redisClient.HGet(redisCtx, key, "response_time").Result()
+		if err != nil {
+			return 0, fmt.Errorf("failed to get response_time for key %s: %v", key, err)
+		}
+
+		rt, err := json.Number(responseTime).Int64()
+		if err != nil {
+			return 0, fmt.Errorf("failed to convert response_time to int64: %v", err)
+		}
+
+		totalTime += rt
+		jobCount++
+	}
+
+	if jobCount == 0 {
+		return 0, nil // No jobs processed yet
+	}
+
+	averageTime := float64(totalTime) / (float64(jobCount) * 1000) // Convert to seconds
+	return averageTime, nil
 }
 
 
@@ -56,10 +73,9 @@ func main() {
 	conn, ch, err := initRabbitMQ()
 	failOnError(err, "Failed to connect to RabbitMQ")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	redis_ctx := context.Background()
 
 	// Initialize Redis client
-	rdb := initRedis()
+	initRedis()
 
 
 	defer ch.Close()
@@ -129,7 +145,11 @@ func main() {
 			return
 		}
 
-		err = rdb.Set(redis_ctx, job.JobID, "submitted", 0).Err()
+		data := map[string]interface{}{
+			"response_time": 0,
+			"status":        "submitted",
+		}
+		err = redisClient.HSet(redisCtx, job.JobID, data).Err()
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to set status"})
 			return
@@ -142,7 +162,7 @@ func main() {
 	// Status endpoint
 	r.GET("/status/:jobID", func(c *gin.Context) {
 		jobID := c.Param("jobID")
-		status, err := rdb.Get(redis_ctx, jobID).Result()
+		status, err := redisClient.HGet(redisCtx, jobID, "status").Result()
 
 		if err == redis.Nil {
 			c.JSON(http.StatusNotFound, gin.H{"status": "not found"})
@@ -167,10 +187,15 @@ func main() {
 	})
 
 	// Endpoint to get average response time
-	// r.GET("/average-response-time", func(c *gin.Context) {
-	// 	avgTime := getAverageResponseTime()
-	// 	c.JSON(http.StatusOK, gin.H{"average_response_time": avgTime.Seconds()})
-	// })
+	r.GET("/average-response-time", func(c *gin.Context) {
+		avgTime, err := calculateAverageResponseTime()
+		if err != nil {
+			log.Printf("Failed to calculate average response time: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to calculate average response time"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"average_response_time": avgTime})
+	})
 
 	// Start the server on port 8080
 	r.Run(":8082")
@@ -219,12 +244,35 @@ func initRabbitMQ() (*amqp.Connection, *amqp.Channel, error) {
 	return conn, ch, nil
 }
 
-func initRedis() *redis.Client {
-	rdb := redis.NewClient(&redis.Options{
-        Addr:     os.Getenv("REDIS_CONNECTION"),
-        Password: "", // no password set
-        DB:       0,  // use default DB
-    })
+func initRedis() {
+	redisClient = redis.NewClient(&redis.Options{
+		Addr:     os.Getenv("REDIS_CONNECTION"), // Redis connection string
+		Password: "",                            // No password set
+		DB:       0,                             // Use default DB
+	})
 
-	return rdb
+	removeAllHashKeys("*")
+}
+
+// Remove all hash keys
+func removeAllHashKeys(pattern string) error {
+	// Find keys matching the pattern
+	keys, err := redisClient.Keys(redisCtx, pattern).Result()
+	if err != nil {
+		return fmt.Errorf("failed to fetch keys: %v", err)
+	}
+
+	if len(keys) == 0 {
+		log.Println("No keys match the given pattern")
+		return nil
+	}
+
+	// Delete the keys
+	deletedCount, err := redisClient.Del(redisCtx, keys...).Result()
+	if err != nil {
+		return fmt.Errorf("failed to delete keys: %v", err)
+	}
+
+	log.Printf("Deleted %d keys matching the pattern '%s'", deletedCount, pattern)
+	return nil
 }

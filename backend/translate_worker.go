@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"context"
+	"time"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"encoding/json"
 	"backend/pkg/translation"
@@ -20,6 +21,9 @@ var margins = map[string]float64{
 	"right": 30,
 }
 
+var redisClient *redis.Client
+var redisCtx = context.Background()
+
 func main() {
 
 	// Load environment variables
@@ -28,13 +32,13 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 	
-	conn, err := connectRabbitMQ(os.Getenv("RABBITMQ_CONNECTION"))
+	conn, err := connectRabbitMQ()
 	failOnError(err, "Failed to connect to RabbitMQ")
 	defer conn.Close()
 
-	rdb := initRedis()
-	redis_ctx := context.Background()
+	initRedis()
 
+	var req_count int = 0
 	channel, err := conn.Channel()
 	failOnError(err, "Failed to open a channel")
 	defer channel.Close()
@@ -50,16 +54,28 @@ func main() {
 
 	go func() {
 		for d := range msgs {
+			req_count++
 			var job models.Job
 			err := json.Unmarshal(d.Body, &job)
 			failOnError(err, "Failed to unmarshal job")
 
-			filePath, err := processMessage(&job)
+			_, err = processMessage(&job)
 			if err != nil {
 				log.Printf("Failed to translate: %v", err)
 			}
-			rdb.Set(redis_ctx, job.JobID, "completed", 0)
-			log.Printf("OutFilePath: %s", filePath)
+			
+			job.CompletedAt = time.Now()
+        	job.ResponseTime = job.CompletedAt.Sub(job.SubmittedAt)
+
+			data := map[string]interface{}{
+				"response_time": job.ResponseTime.Milliseconds(), // Store as milliseconds
+				"status":        "completed",
+			}
+			err = redisClient.HSet(redisCtx, job.JobID, data).Err()
+			failOnError(err, "Failed to set response time Redis")
+
+			log.Printf("Request %vth Total processing time: %v", req_count, job.ResponseTime)
+
 		}
 	}()
 
@@ -75,22 +91,20 @@ func failOnError(err error, msg string) {
 	}
 }
 
-func connectRabbitMQ(RABBITMQ_CONNECTION string) (*amqp.Connection, error) {
-	conn, err := amqp.Dial(RABBITMQ_CONNECTION)
+func connectRabbitMQ() (*amqp.Connection, error) {
+	conn, err := amqp.Dial(os.Getenv("RABBITMQ_CONNECTION"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
 	}
 	return conn, nil
 }
 
-func initRedis() *redis.Client {
-	rdb := redis.NewClient(&redis.Options{
-        Addr:     os.Getenv("REDIS_CONNECTION"),
-        Password: "", // no password set
-        DB:       0,  // use default DB
-    })
-
-	return rdb
+func initRedis() {
+	redisClient = redis.NewClient(&redis.Options{
+		Addr:     os.Getenv("REDIS_CONNECTION"), // Redis connection string
+		Password: "",                            // No password set
+		DB:       0,                             // Use default DB
+	})
 }
 
 
@@ -153,5 +167,6 @@ func processMessage(job *models.Job) (string, error) {
 	
 	return OutFilePath, nil
 }
+ 
 
 

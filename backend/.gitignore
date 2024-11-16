@@ -17,3 +17,5 @@ uploads/*
 !uploads/.gitkeep
 
 .env
+
+.env.local
