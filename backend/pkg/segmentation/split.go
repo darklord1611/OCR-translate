@@ -11,23 +11,19 @@ import (
 
 // splitImage chia ảnh thành nhiều đoạn văn bản nhỏ
 func SplitImage(filePath string, prefix string) []string {
-	// Đọc file ảnh
 	imgFile, err := os.Open(filePath)
 	if err != nil {
 		log.Fatal("Không thể mở ảnh:", err)
 	}
 	defer imgFile.Close()
 
-	// Decode ảnh
 	img, _, err := image.Decode(imgFile)
 	if err != nil {
 		log.Fatal("Không thể decode ảnh:", err)
 	}
 
-	// Chuyển ảnh sang grayscale
 	grayImg := convertToGray(img)
 
-	// Tìm và cắt đoạn
 	segments := findParagraphs(grayImg)
 
 	return SaveSegments(segments, prefix)
@@ -58,16 +54,15 @@ func findParagraphs(grayImg *image.Gray) []image.Image {
 
 	// fmt.Println(Density)
 	count := 0
-	splitPosition := make([]int, 0, height) // Khởi tạo slice với make() thay vì gọi biến chưa khai báo
+	splitPosition := make([]int, 0, height)
 	for line := 1; line < height; line++ {
-		if (Density[line] == Density[line-1]) {
+		if Density[line] == Density[line-1] {
 			count++
 		} else {
+			if count >= sequenceLimit {
+				splitPosition = append(splitPosition, line)
+			}
 			count = 0
-		}
-		if (count == sequenceLimit) {
-			splitPosition = append(splitPosition, line)
-			count = 0 
 		}
 	}
 

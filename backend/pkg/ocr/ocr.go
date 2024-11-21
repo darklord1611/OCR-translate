@@ -27,6 +27,22 @@ func Cleanup() {
 	fmt.Println("No explicit cleanup needed, sync.Pool handles cleanup")
 }
 
+func OneShotOCR(imagePath string) (string, error) {
+	client := gosseract.NewClient()
+	defer client.Close()
+	err := client.SetImage(imagePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to set image: %v", err)
+	}
+
+	text, err := client.Text()
+	if err != nil {
+		return "", fmt.Errorf("failed to extract text: %v", err)
+	}
+
+	return strings.ReplaceAll(text, "\n", ""), nil
+}
+
 // OCRFilter processes OCR on a single image
 func OCRFilter(imagePath string) (string, error) {
 	// Get a Tesseract client from the pool
@@ -60,15 +76,14 @@ func OCRFilterConcurrent(imagePaths []string) (string, error) {
 		go func(imgPath string) {
 			defer wg.Done()
 
-			text, err := OCRFilter(imgPath)
+			text, err := OneShotOCR(imgPath)
 			if err != nil {
 				errOccurred = err // capture the first error (optional)
 				return
 			}
-
 			// Ensure safe access to the shared result map
 			mu.Lock()
-			result = result + text
+			result = result + "     " + strings.TrimSpace(text) + "\n"
 			mu.Unlock()
 		}(path)
 	}
