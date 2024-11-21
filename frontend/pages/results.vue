@@ -41,7 +41,7 @@ const convertImagesToPDFs = async () => {
     formData.append(`file`, fileBlob, `image${index}.png`);
 
     try {
-      const response = await fetch('http://localhost:8080/upload', {
+      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/upload`, {
         method: 'POST',
         body: formData,
       });
@@ -59,13 +59,13 @@ const convertImagesToPDFs = async () => {
 const pollJobStatus = async (jobID: string) => {
   const interval = setInterval(async () => {
     try {
-      const response = await fetch(`http://localhost:8080/status/${jobID}`);
+      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/status/${jobID}`);
       const data = await response.json();
       const status = data.status;
 
       if (status === 'completed') {
         clearInterval(interval);
-        afterImageUrls.value.push(`http://localhost:8080/uploads/${jobID}.pdf`);
+        afterImageUrls.value.push(`${import.meta.env.VITE_BACKEND_URL}/uploads/${jobID}.pdf`);
       }
     } catch (error) {
       console.error('Error checking job status:', error);
@@ -76,7 +76,7 @@ const pollJobStatus = async (jobID: string) => {
 const downloadResult = () => {
   jobIDs.value.forEach((jobID) => {
     const link = document.createElement('a');
-    link.href = `http://localhost:8080/download/${jobID}.pdf`;
+    link.href = `${import.meta.env.VITE_BACKEND_URL}/download/${jobID}.pdf`;
     link.download = `${jobID}.pdf`;
     document.body.appendChild(link);
     link.click();

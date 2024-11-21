@@ -20,6 +20,13 @@ yarn install
 bun install
 ```
 
+## Env
+Create .env file from .env.example
+```bash
+VITE_BACKEND_URL=http://localhost:8080
+```
+
+
 ## Development Server
 
 Start the development server on `http://localhost:3000`:
