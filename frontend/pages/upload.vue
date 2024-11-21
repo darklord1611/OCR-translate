@@ -9,8 +9,6 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
-import { useRouter } from 'vue-router';
 
 const fileInput = ref<HTMLInputElement | null>(null);
 const router = useRouter();
