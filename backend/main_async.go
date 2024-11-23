@@ -197,8 +197,8 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"average_response_time": avgTime})
 	})
 
-	// Start the server on port 8080
-	r.Run(":8082")
+	port := ":" + os.Getenv("MQ_ASYNC_PORT")
+	r.Run(port)
 }
 
 func failOnError(err error, msg string) {
