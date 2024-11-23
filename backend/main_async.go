@@ -27,38 +27,30 @@ var (
 var redisClient *redis.Client
 var redisCtx = context.Background()
 
-
-
-func calculateAverageResponseTime() (float64, error) {
-	keys, err := redisClient.Keys(redisCtx, "*").Result()
+// Retrieve the average response time from Redis
+func getAverageResponseTime() (float64, error) {
+	// Retrieve updated total response time and total requests
+	totalResponseTime, err := redisClient.Get(redisCtx, "total_response_time").Float64()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get job keys: %v", err)
+		return 0, fmt.Errorf("failed to get total response time: %v", err)
 	}
 
-	var totalTime int64
-	var jobCount int64
-
-	for _, key := range keys {
-		responseTime, err := redisClient.HGet(redisCtx, key, "response_time").Result()
-		if err != nil {
-			return 0, fmt.Errorf("failed to get response_time for key %s: %v", key, err)
-		}
-
-		rt, err := json.Number(responseTime).Int64()
-		if err != nil {
-			return 0, fmt.Errorf("failed to convert response_time to int64: %v", err)
-		}
-
-		totalTime += rt
-		jobCount++
+	totalRequests, err := redisClient.Get(redisCtx, "total_requests").Int64()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get total requests: %v", err)
 	}
 
-	if jobCount == 0 {
-		return 0, nil // No jobs processed yet
+	if err == redis.Nil {
+		// Return 0 if the key doesn't exist
+		return 0, nil
+	} else if err != nil {
+		return 0, fmt.Errorf("failed to get average response time: %v", err)
 	}
 
-	averageTime := float64(totalTime) / (float64(jobCount) * 1000) // Convert to seconds
-	return averageTime, nil
+	// Calculate the average
+	average := totalResponseTime / float64(totalRequests)
+
+	return average, nil
 }
 
 
@@ -188,7 +180,7 @@ func main() {
 
 	// Endpoint to get average response time
 	r.GET("/average-response-time", func(c *gin.Context) {
-		avgTime, err := calculateAverageResponseTime()
+		avgTime, err := getAverageResponseTime()
 		if err != nil {
 			log.Printf("Failed to calculate average response time: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to calculate average response time"})

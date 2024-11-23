@@ -146,17 +146,8 @@ func consumeMessage(channel *amqp.Channel, queueName string) (<-chan amqp.Delive
 
 func processMessage(job *models.Job, mode string) error {
 
-	var text string
-	var err error
-	if mode == "SPLIT_IMAGE" {
-		segmentPaths := segmentation.SplitImage(job.ImagePath, job.JobID)
-		text, err = ocr.OCRFilterConcurrent(segmentPaths)
-	} else if mode == "ONE_SHOT" {
-		text, err = ocr.OneShotOCR(job.ImagePath)
-	} else if mode == "CLIENT_POOL" {
-		text, err = ocr.OCRFilter(job.ImagePath)
-	}
-
+	segmentPaths := segmentation.SplitImage(job.ImagePath, job.JobID)
+	text, err := ocr.OCRFilterConcurrent(segmentPaths)
 
 	if err != nil {
 		return fmt.Errorf("failed to process image: %w", err)

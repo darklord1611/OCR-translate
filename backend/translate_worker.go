@@ -24,6 +24,24 @@ var margins = map[string]float64{
 var redisClient *redis.Client
 var redisCtx = context.Background()
 
+
+// Update average response time in Redis
+func updateAverageResponseTime(responseTime time.Duration) error {
+	// Increment total response time
+	err := redisClient.IncrByFloat(redisCtx, "total_response_time", responseTime.Seconds()).Err()
+	if err != nil {
+		return fmt.Errorf("failed to increment total response time: %v", err)
+	}
+
+	// Increment total requests
+	err = redisClient.Incr(redisCtx, "total_requests").Err()
+	if err != nil {
+		return fmt.Errorf("failed to increment total requests: %v", err)
+	}
+
+	return nil
+}
+
 func main() {
 
 	// Load environment variables
@@ -66,6 +84,8 @@ func main() {
 			
 			job.CompletedAt = time.Now()
         	job.ResponseTime = job.CompletedAt.Sub(job.SubmittedAt)
+
+			updateAverageResponseTime(job.ResponseTime)
 
 			data := map[string]interface{}{
 				"response_time": job.ResponseTime.Milliseconds(), // Store as milliseconds
