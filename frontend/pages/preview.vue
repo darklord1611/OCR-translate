@@ -1,62 +1,51 @@
 <template>
-  <div class="container mx-auto pt-12 flex">
-    <div class="w-full">
-      <div class="navbar controls flex justify-between items-center rounded-lg mb-4 w-full">
-        <div class="flex items-center space-x-4">
-          <select class="select select-bordered w-24">
-            <option>A4</option>
-            <option>Letter</option>
-          </select>
-          <select class="select select-bordered w-24">
-            <option>Auto</option>
-            <option>Portrait</option>
-            <option>Landscape</option>
-          </select>
-          <select class="select select-bordered w-36">
-            <option>Small Margin</option>
-            <option>No Margin</option>
-            <option>Large Margin</option>
-          </select>
-        </div>
-        <button v-if="images.length === 0" class="btn" >Convert</button>
-        <button v-else class="btn btn-primary" @click="convertImage">Convert</button>
+  <div class="pt-24 min-h-screen" style="background-image: url('/background.jpg');">
+    <div class="flex justify-center gap-4 h-24 flex-wrap">
+      <select class="select select-bordered w-24 text-primary">
+        <option>A4</option>
+        <option>Letter</option>
+      </select>
+      <select class="select select-bordered w-24 text-primary">
+        <option>Auto</option>
+        <option>Portrait</option>
+        <option>Landscape</option>
+      </select>
+      <select class="select select-bordered w-36 text-primary">
+        <option>Small Margin</option>
+        <option>No Margin</option>
+        <option>Large Margin</option>
+      </select>
+      <button v-if="images.length === 0" class="btn btn-primary btn-disabled">Convert</button>
+      <button v-else class="btn btn-primary" @click="convertImage">Convert</button>
+    </div>
 
+    <div class="flex justify-center flex-wrap gap-8 p-8">
+      <div v-for="(image, index) in images" :key="index" class="flex justify-center flex-col items-center group relative">
+        <img :src="image.url" alt="Uploaded Image"
+          class="h-72 w-full shadow-lg rounded-md object-cover transition-transform duration-300 ease-in-out hover:scale-105 hover:shadow-2xl m-2">
+        <div class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex space-x-2">
+          <button class="btn btn-secondary btn-sm" @click="zoomImage(image.url)">
+            <i class="fas fa-search-plus"></i>
+          </button>
+          <button class="btn btn-secondary btn-sm" @click="removeImage(index)">
+            <i class="fas fa-trash-alt"></i>
+          </button>
+        </div>
+        <p class="text-primary overflow-hidden text-ellipsis">{{ image.name }}</p>
       </div>
 
-      <div class="images-container grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-y-4">
-        <div
-          v-for="(image, index) in images"
-          :key="index"
-          class="file-preview relative group w-48"
-          :class="{'justify-self-center': 'true'}"
-        >
-          <img :src="image.url" alt="Uploaded Image" class="image-preview shadow-lg rounded-md object-cover transition duration-200">
-
-          <div class="buttons absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex space-x-2">
-            <button class="btn btn-secondary btn-xs" @click="zoomImage(image.url)">
-              <i class="fas fa-search-plus"></i> <!-- Zoom Icon -->
-            </button>
-            <button class="btn btn-secondary btn-xs" @click="removeImage(index)">
-              <i class="fas fa-trash-alt"></i> <!-- Delete Icon -->
-            </button>
-
-          </div>
-
-          <p class="image-name text-center text-gray-600 mt-2">{{ image.name }}</p>
+      <div class="h-72 w-72 flex items-center justify-center cursor-pointer text-primary hover:text-secondary transition duration-200 border-2 border-dashed border-primary hover:border-secondary rounded-md" @click="triggerFileInput">
+        <div class="flex flex-col justify-center items-center">
+          <i class="fa-solid fa-image text-4xl"></i>
+          <span class="text-center text-xl font-bold mt-2"><i class="fa-solid fa-plus"></i> Add Image</span>
         </div>
-
-        <div class="add-image-button file-preview relative group w-48 flex items-center justify-center cursor-pointer text-gray-500 hover:bg-gray-100 transition duration-200 border-2 border-dashed border-gray-300 rounded-md justify-self-center" @click="triggerFileInput">
-          <span class="text-center">+ Add Image</span>
-          <input type="file" class="hidden" ref="fileInput" @change="handleFileUpload">
-        </div>
+        <input type="file" class="hidden" ref="fileInput" @change="handleFileUpload">
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
-import { useRouter } from 'vue-router';
 
 const router = useRouter();
 const fileInput = ref<HTMLInputElement | null>(null);
@@ -67,7 +56,7 @@ const removeImage = (index: number) => {
 };
 
 const zoomImage = (url: string) => {
-  window.open(url, '_blank'); 
+  window.open(url, '_blank');
 };
 
 const convertImage = () => {
@@ -92,74 +81,4 @@ const handleFileUpload = (event: Event) => {
 };
 </script>
 
-<style scoped>
-/* Controls Section */
-.controls {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1rem;
-  border-radius: 0.5rem;
-  box-shadow: 3px 3px 20px rgba(170, 74, 74, 0.35);
-  margin-bottom: 1rem;
-  margin-top: 2rem;
-  width: 100%;
-}
-
-.controls .flex {
-  width: 100%;
-}
-
-.controls select {
-  font-weight: bold;
-  width: 9rem;
-}
-
-.controls button {
-  width: auto;
-}
-
-.images-container {
-  display: grid;
-  gap: 1rem;
-}
-
-.file-preview {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: 12rem;
-}
-
-.image-preview {
-  width: 12rem;
-  height: 12rem;
-  object-fit: cover;
-  transition: box-shadow 0.3s ease, transform 0.3s ease;
-}
-
-.image-preview:hover {
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-  transform: scale(1.02);
-}
-
-.buttons {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-}
-
-.image-name {
-  width: 100%;
-  text-align: center;
-  font-weight: 500;
-  margin-top: 0.5rem;
-}
-
-.add-image-button {
-  width: 12rem;
-  height: 12rem;
-}
-
-</style>
+<style scoped></style>

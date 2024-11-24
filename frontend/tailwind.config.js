@@ -2,13 +2,17 @@
 export default {
   content: [],
   theme: {
-    extend: {},
+    extend: {
+      fontFamily: {
+        sans: ['Nunito', 'sans-serif'],
+      },
+    },
   },
   plugins: [
     require('daisyui'),
   ],
   daisyui: {
-    themes: ['light', 'dark', 'system', 'bumblebee', 'synthwave', 'dim']
+    themes: ['autumn']
   },
 }
 

@@ -1,13 +1,23 @@
 <template>
-  <div class="container mx-auto py-10 flex justify-center items-center min-h-screen">
-    <nuxt-link to="hhttps://github.com/darklord1611/OCR-translate" class="btn btn-primary m-6">About Us</nuxt-link>
-    <nuxt-link to="/preview" class="btn btn-secondary m-6">Get Start</nuxt-link>
+  <div class="hero bg-white min-h-screen" style="background-image: url('/background.jpg');">
+    <div class="hero-content flex-col lg:flex-row">
+      <img src="/landing.svg" alt="OCR Translate" class="hover:scale-105 m-2 transition-transform duration-300 ease-in-out" />
+      <div class="p-12">
+        <h1 class="text-5xl font-bold text-red-500 hover:scale-105 m-2 transition-transform duration-300 ease-in-out">OCR - Translator</h1>
+        <p class="py-6">
+          Press the button below to get started with OCR Translate. Upload an image containing English text, and we'll
+          convert it to Vietnamese text and generate a PDF for you.
+        </p>
+        <div class="flex space-x-6">
+          <nuxt-link to="/preview" class="btn btn-primary"><i class="fa-solid fa-rocket"></i> Get Started</nuxt-link>
+          <nuxt-link to="https://github.com/darklord1611/OCR-translate" class="btn btn-secondary"><i class="fa-brands fa-github"></i> About Us</nuxt-link>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
-import { useRouter } from 'vue-router';
 
 const fileInput = ref<HTMLInputElement | null>(null);
 const router = useRouter();
@@ -29,20 +39,4 @@ const handleFileUpload = async (event: Event) => {
 };
 </script>
 
-<style scoped>
-/* Styles similar to Smallpdf */
-.container {
-  max-width: 800px;
-}
-.card {
-  background: #fff;
-  border-radius: 8px;
-}
-.upload-area {
-  transition: background-color 0.3s ease;
-  min-height: 200px; /* Increase the minimum height */
-}
-.upload-area:hover {
-  background-color: #f3f4f6;
-}
-</style>
+<style scoped></style>
