@@ -6,6 +6,8 @@ import (
 
 type Job struct {
 	ImagePath 	string
+	ImageDownloadURL	string
+	PDFUploadURL	string
 	JobID		string
 	ExtractedText string
 	TranslatedText string

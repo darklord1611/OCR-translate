@@ -4,24 +4,31 @@ import (
 	"backend/models"
 	"backend/pkg/ocr"
 	"backend/pkg/pdf"
+	"backend/pkg/segmentation"
 	"backend/pkg/translation"
 	"fmt"
 	"log"
 	"net/http"
 	"sync"
 	"time"
+	"os"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/joho/godotenv"
 )
-
 
 var (
 	totalResponseTime time.Duration
 	totalJobs         int
 	averageMutex      = &sync.Mutex{}
 )
+
+var margins = map[string]float64{
+	"left":  30,
+	"top":   50,
+	"right": 30}
 
 // Function to update average response time
 func updateAverageResponseTime(responseTime time.Duration) {
@@ -44,45 +51,26 @@ func getAverageResponseTime() time.Duration {
 }
 
 
-
-// CONSTANTS
-const numWorkers = 5
-var margins = map[string]float64{
-	"left":  30,
-	"top":   50,
-	"right": 30}
-
-
-
-var ocrQueue = make(chan *models.Job, 100)        // OCR queue channel
-var translationQueue = make(chan *models.Job, 100) // Translation queue channel
-var pdfQueue = make(chan *models.Job, 100)         // PDF queue channel
-
 var jobStatusMap = make(map[string]string)
 var jobStatusMutex = &sync.Mutex{}
 
 func main() {
+	// Load environment variables
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
 
 	// Initialize the Tesseract client
 	ocr.Initialize()
 	defer ocr.Cleanup() // Ensure the client is closed when the server shuts down
-
-	// Start workers for each queue
-	for i := 0; i < numWorkers; i++ {
-		go ocrWorker(i, ocrQueue)
-	}
-
-	for i := 0; i < numWorkers; i++ {
-		go translationWorker(i, translationQueue)
-		go pdfWorker(i, pdfQueue)
-	}
 
 	// Create a Gin router
 	r := gin.Default()
 
 	// Config CORS middleware
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:3000"}, // Adjust this to match your frontend's origin
+		AllowOrigins:     []string{"*"}, // Adjust this to match your frontend's origin
 		AllowMethods:     []string{"GET", "POST"},
 		AllowHeaders:     []string{"Origin", "Content-Type"},
 		ExposeHeaders:    []string{"Content-Length"},
@@ -99,7 +87,6 @@ func main() {
 		// Get the uploaded file
 		file, err := c.FormFile("file")
 		if err != nil {
-			print("Error")
 			c.String(http.StatusBadRequest, fmt.Sprintf("get file err: %s", err.Error()))
 			return
 		}
@@ -107,8 +94,6 @@ func main() {
 		// Save the file to a specific location
 		err = c.SaveUploadedFile(file, imagePath)
 		if err != nil {
-			print("Error")
-
 			c.String(http.StatusInternalServerError, fmt.Sprintf("save file err: %s", err.Error()))
 			return
 		}
@@ -116,7 +101,8 @@ func main() {
 		// Generate a UUID for the jobID
 		jobID := uuid.New().String()
 
-		// Initialize job
+		// pipeline
+
 		job := &models.Job{
 			ImagePath: imagePath,
 			JobID:     jobID,
@@ -128,11 +114,37 @@ func main() {
 		jobStatusMap[job.JobID] = "pending"
 		jobStatusMutex.Unlock()
 
-		// Enqueue the job in the OCR queue
-		ocrQueue <- job
+		// process immediately
 
+		originalText, err := ocr.OCRFilter(imagePath)
+		if err != nil {
+			log.Printf("Job %s failed", job.JobID)
+			jobStatusMutex.Lock()
+			jobStatusMap[job.JobID] = "failed"
+			jobStatusMutex.Unlock()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process image"})
+		}
+
+		translatedText := translation.TranslateFilter(originalText)
+		result, err := pdf.ExportPDF(translatedText, job.JobID, margins)
+		if err != nil {
+			log.Printf("Job %s failed", job.JobID)
+			jobStatusMutex.Lock()
+			jobStatusMap[job.JobID] = "failed"
+			jobStatusMutex.Unlock()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate PDF"})
+		}
+
+		job.OutFilePath = result
+		job.CompletedAt = time.Now()
+		job.ResponseTime = job.CompletedAt.Sub(job.SubmittedAt)
+		// Update average response time
+		updateAverageResponseTime(job.ResponseTime)
+
+		filename := job.JobID + ".pdf"
 		// Respond with a success message
-		c.JSON(200, gin.H{"message": "Job submitted", "jobID": jobID})
+		c.Header("Content-Disposition", "attachment; filename="+filename)
+		c.File(result)
 	})
 
 	// Status endpoint
@@ -147,7 +159,6 @@ func main() {
 		}
 		c.JSON(http.StatusOK, gin.H{"status": status})
 	})
-
 	// Serve files normally
 	r.Static("/uploads", "./output")
 
@@ -166,75 +177,46 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"average_response_time": avgTime.Seconds()})
 	})
 
+	port := ":" + os.Getenv("SYNC_PORT")
 	// Start the server on port 8080
-	r.Run(":8081")
+	r.Run(port)
 }
 
-// Worker function for OCR processing
-func ocrWorker(id int, jobs <-chan *models.Job) {
+func worker(id int, jobs <-chan *models.Job) {
 	for job := range jobs {
 		start_time := time.Now()
-		log.Printf("OCR Worker %d started job %s", id, job.JobID)
+		log.Printf("Worker %d started job %s", id, job.JobID)
 
-		// Update job status to "OCR in-progress"
+		// Update job status to "in-progress"
 		jobStatusMutex.Lock()
-		jobStatusMap[job.JobID] = "OCR in-progress"
+		jobStatusMap[job.JobID] = "in-progress"
 		jobStatusMutex.Unlock()
 
-		// Perform OCR
-		originalText, err := ocr.OCRFilter(job.ImagePath)
+		splitTime := time.Now()
+		segmentPaths := segmentation.SplitImage(job.ImagePath, job.JobID)
+		log.Printf("Image Spliting took %v\n", time.Since(splitTime))
+		// Perform the OCR, translation, and PDF generation here
+		OCRTime := time.Now()
+		originalText, err := ocr.OCRFilterConcurrent(segmentPaths)
 		if err != nil {
-			log.Printf("Job %s failed during OCR", job.JobID)
+			log.Printf("Job %s failed", id, job.JobID)
 			jobStatusMutex.Lock()
 			jobStatusMap[job.JobID] = "failed"
 			jobStatusMutex.Unlock()
 			continue
 		}
-		elapsed_time := time.Since(start_time)
-		log.Printf("OCR took %v\n", elapsed_time)
 
-		job.ExtractedText = originalText
-		translationQueue <- job // Pass job to the translation queue
-	}
-}
-
-// Worker function for Translation processing
-func translationWorker(id int, jobs <-chan *models.Job) {
-	for job := range jobs {
-		start_time := time.Now()
-		log.Printf("Translation Worker %d started job %s", id, job.JobID)
-
-		// Update job status to "Translation in-progress"
-		jobStatusMutex.Lock()
-		jobStatusMap[job.JobID] = "Translation in-progress"
-		jobStatusMutex.Unlock()
-
-		// Perform translation
-		translatedText := translation.TranslateFilter(job.ExtractedText)
-		job.TranslatedText = translatedText
-
-		elapsed_time := time.Since(start_time)
-		log.Printf("Translation took %v\n", elapsed_time)
-
-		pdfQueue <- job // Pass job to the PDF generation queue
-	}
-}
-
-// Worker function for PDF generation
-func pdfWorker(id int, jobs <-chan *models.Job) {
-	for job := range jobs {
-		start_time := time.Now()
-		log.Printf("PDF Worker %d started job %s", id, job.JobID)
-
-		// Update job status to "PDF generation in-progress"
-		jobStatusMutex.Lock()
-		jobStatusMap[job.JobID] = "PDF generation in-progress"
-		jobStatusMutex.Unlock()
-
-		// Generate PDF
-		result, err := pdf.ExportPDF(job.TranslatedText, job.JobID, margins)
+		log.Printf("OCR took %v\n", time.Since(OCRTime))
+		TranslationTime := time.Now()
+		translatedText := translation.TranslateFilter(originalText)
+		log.Printf("Translation took %v\n", time.Since(TranslationTime))
+		margins := map[string]float64{
+			"left":  30,
+			"top":   50,
+			"right": 30}
+		result, err := pdf.ExportPDF(translatedText, job.JobID, margins)
 		if err != nil {
-			log.Printf("Job %s failed during PDF generation", job.JobID)
+			log.Printf("Job %s failed", id, job.JobID)
 			jobStatusMutex.Lock()
 			jobStatusMap[job.JobID] = "failed"
 			jobStatusMutex.Unlock()
@@ -255,6 +237,6 @@ func pdfWorker(id int, jobs <-chan *models.Job) {
 		// Update average response time
 		updateAverageResponseTime(job.ResponseTime)
 
-		log.Printf("PDF Worker %d finished job %s", id, job.JobID)
+		log.Printf("Worker %d finished job %s", id, job.JobID)
 	}
 }

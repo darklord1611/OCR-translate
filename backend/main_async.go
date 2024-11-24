@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 	"os"
 	"encoding/json"
@@ -16,49 +15,40 @@ import (
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
-)
-
-var (
-	totalResponseTime time.Duration
-	totalJobs         int
-	averageMutex      = &sync.Mutex{}
+	"backend/pkg/aws_utils"
+	"mime/multipart"
+	"path/filepath"
 )
 
 var redisClient *redis.Client
 var redisCtx = context.Background()
+var rabbitConn *amqp.Connection
+var s3_bucket_name string
 
-
-
-func calculateAverageResponseTime() (float64, error) {
-	keys, err := redisClient.Keys(redisCtx, "*").Result()
+// Retrieve the average response time from Redis
+func getAverageResponseTime() (float64, error) {
+	// Retrieve updated total response time and total requests
+	totalResponseTime, err := redisClient.Get(redisCtx, "total_response_time").Float64()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get job keys: %v", err)
+		return 0, fmt.Errorf("failed to get total response time: %v", err)
 	}
 
-	var totalTime int64
-	var jobCount int64
-
-	for _, key := range keys {
-		responseTime, err := redisClient.HGet(redisCtx, key, "response_time").Result()
-		if err != nil {
-			return 0, fmt.Errorf("failed to get response_time for key %s: %v", key, err)
-		}
-
-		rt, err := json.Number(responseTime).Int64()
-		if err != nil {
-			return 0, fmt.Errorf("failed to convert response_time to int64: %v", err)
-		}
-
-		totalTime += rt
-		jobCount++
+	totalRequests, err := redisClient.Get(redisCtx, "total_requests").Int64()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get total requests: %v", err)
 	}
 
-	if jobCount == 0 {
-		return 0, nil // No jobs processed yet
+	if err == redis.Nil {
+		// Return 0 if the key doesn't exist
+		return 0, nil
+	} else if err != nil {
+		return 0, fmt.Errorf("failed to get average response time: %v", err)
 	}
 
-	averageTime := float64(totalTime) / (float64(jobCount) * 1000) // Convert to seconds
-	return averageTime, nil
+	// Calculate the average
+	average := totalResponseTime / float64(totalRequests)
+
+	return average, nil
 }
 
 
@@ -70,18 +60,19 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
-	conn, ch, err := initRabbitMQ()
+	ch, err := initRabbitMQ()
 	failOnError(err, "Failed to connect to RabbitMQ")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 
 	// Initialize Redis client
 	initRedis()
 
+	initS3()
+	s3_bucket_name = os.Getenv("AWS_BUCKET_NAME")
 
 	defer ch.Close()
-	defer conn.Close()
+	defer rabbitConn.Close()
 	defer cancel()
-
 
 
 	// Create a Gin router
@@ -109,21 +100,47 @@ func main() {
 			c.String(http.StatusBadRequest, fmt.Sprintf("get file err: %s", err.Error()))
 			return
 		}
-		imagePath := "./uploads/" + file.Filename
-		// Save the file to a specific location
-		err = c.SaveUploadedFile(file, imagePath)
-		if err != nil {
-			c.String(http.StatusInternalServerError, fmt.Sprintf("save file err: %s", err.Error()))
-			return
-		}
 
 		// Generate a UUID for the jobID
 		jobID := uuid.New().String()
 
-		// pipeline
+		// Generate a new filename with the UUID
+		newFileName := generateNewFileName(file, jobID)
+		imagePath := "./uploads/" + newFileName
+		key := "uploads/" + newFileName
 
+		// Generate presign URLs to upload and download the image
+		ImageDownloadURL, ImageUploadURL, err := aws_utils.GeneratePresignedURL(s3_bucket_name, key, 15*time.Minute)
+		if err != nil {
+			c.String(http.StatusInternalServerError, fmt.Sprintf("failed to generate download pre-signed URL: %s", err.Error()))
+			return
+		}
+
+		// Generate presign URL for translation worker to upload the pdf
+		out_key := "output/" + jobID + ".pdf"
+		PDFUploadURL, err := aws_utils.GenerateUploadURL(s3_bucket_name, out_key, 15*time.Minute)
+
+		// Stream the image file to S3 using the pre-signed URL
+		src, err := file.Open()
+		if err != nil {
+			c.String(http.StatusInternalServerError, fmt.Sprintf("file open err: %s", err.Error()))
+			return
+		}
+		defer src.Close()
+		err = aws_utils.UploadStream(src, ImageUploadURL)
+
+		if err != nil {
+			c.String(http.StatusInternalServerError, fmt.Sprintf("upload to S3 failed: %s", err.Error()))
+			return
+		}
+
+		
+
+		// Create a new job
 		job := &models.Job{
 			ImagePath: imagePath,
+			ImageDownloadURL: ImageDownloadURL,
+			PDFUploadURL: PDFUploadURL,
 			JobID:     jobID,
 			SubmittedAt: time.Now(),
 		}
@@ -186,19 +203,71 @@ func main() {
 		c.File(filePath)
 	})
 
+	r.GET("/storage/:filename", func(c *gin.Context) {
+		filename := c.Param("filename")
+		filePath := "./uploads/" + filename
+
+		c.Header("Content-Disposition", "attachment; filename="+filename)
+		c.File(filePath)
+	})
+
+	r.GET("/cloud_download/:filename", func(c *gin.Context) {
+		filename := c.Param("filename")
+		// Generate a presigned URL for downloading the file
+		filePath := "output/" + filename
+		url, err := aws_utils.GenerateDownloadURL(s3_bucket_name, filePath, 15*time.Minute)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Failed to generate presigned URL"})
+			return
+		}
+
+		log.Printf("Generated presigned URL: %s", url)
+
+		// Return the URL to the client
+		c.JSON(200, gin.H{
+			"url": url,
+		})
+	})
+
+
+	// Health check endpoint
+	r.GET("/health", func(c *gin.Context) {
+		healthStatus := map[string]string{
+			"redis":     "ok",
+			"rabbitmq":  "ok",
+			"timestamp": time.Now().Format(time.RFC3339),
+		}
+	
+		// Check Redis
+		err := redisClient.Ping(redisCtx).Err()
+		if err != nil {
+			healthStatus["redis"] = "unhealthy"
+			healthStatus["redis_error"] = err.Error()
+		}
+	
+		conn, err := amqp.Dial(os.Getenv("RABBITMQ_CONNECTION"))
+		defer conn.Close()
+		if err != nil {
+			healthStatus["rabbitmq"] = "unhealthy"
+			healthStatus["rabbitmq_error"] = "connection is closed"
+		}
+	
+		c.JSON(http.StatusOK, healthStatus)
+	})
+
 	// Endpoint to get average response time
 	r.GET("/average-response-time", func(c *gin.Context) {
-		avgTime, err := calculateAverageResponseTime()
+		avgTime, err := getAverageResponseTime()
 		if err != nil {
 			log.Printf("Failed to calculate average response time: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to calculate average response time"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"average_response_time": avgTime})
+		c.JSON(http.StatusOK, gin.H{"average_request_processing_time": avgTime})
 	})
 
-	// Start the server on port 8080
-	r.Run(":8082")
+	port := ":" + os.Getenv("MQ_ASYNC_PORT")
+	r.Run(port)
 }
 
 func failOnError(err error, msg string) {
@@ -208,15 +277,16 @@ func failOnError(err error, msg string) {
 }
 
 
-func initRabbitMQ() (*amqp.Connection, *amqp.Channel, error) {
-	conn, err := amqp.Dial(os.Getenv("RABBITMQ_CONNECTION"))
+func initRabbitMQ() (*amqp.Channel, error) {
+	rabbitConn, err := amqp.Dial(os.Getenv("RABBITMQ_CONNECTION"))
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
 	}
 
-	ch, err := conn.Channel()
+
+	ch, err := rabbitConn.Channel()
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to open a channel: %w", err)
+		return nil, fmt.Errorf("failed to open a channel: %w", err)
 	}
 
 	q, err := ch.QueueDeclare(
@@ -241,7 +311,7 @@ func initRabbitMQ() (*amqp.Connection, *amqp.Channel, error) {
 	)
 	failOnError(err, "Failed to declare ocr queue")
 
-	return conn, ch, nil
+	return ch, nil
 }
 
 func initRedis() {
@@ -252,6 +322,11 @@ func initRedis() {
 	})
 
 	removeAllHashKeys("*")
+}
+
+
+func initS3() {
+	aws_utils.InitS3Session(os.Getenv("AWS_REGION"), os.Getenv("AWS_ACCESS_KEY_ID"), os.Getenv("AWS_SECRET_ACCESS_KEY"))
 }
 
 // Remove all hash keys
@@ -275,4 +350,26 @@ func removeAllHashKeys(pattern string) error {
 
 	log.Printf("Deleted %d keys matching the pattern '%s'", deletedCount, pattern)
 	return nil
+}
+
+// Function to generate a new filename with UUID appended before the extension
+func generateNewFileName(file *multipart.FileHeader, uuid string) string {
+
+	// Extract the base name and extension
+	baseName := file.Filename[:len(file.Filename)-len(filepath.Ext(file.Filename))]
+	ext := filepath.Ext(file.Filename)
+
+	// Append the UUID to the base name
+	newFileName := fmt.Sprintf("%s-%s%s", baseName, uuid, ext)
+
+	return newFileName
+}
+
+func addExtensionToFile(filename, ext string) string {
+	// Get the file name without extension
+	extExisting := filepath.Ext(filename)
+	baseName := filename[:len(filename)-len(extExisting)]
+
+	// Add the new extension
+	return baseName + ext
 }

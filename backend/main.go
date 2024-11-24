@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"sync"
 	"time"
-	"os"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -101,6 +100,7 @@ func main() {
 			c.String(http.StatusInternalServerError, fmt.Sprintf("save file err: %s", err.Error()))
 			return
 		}
+
 
 		// Generate a UUID for the jobID
 		jobID := uuid.New().String()
