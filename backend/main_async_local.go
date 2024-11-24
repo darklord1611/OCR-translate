@@ -67,9 +67,6 @@ func main() {
 	// Initialize Redis client
 	initRedis()
 
-	initS3()
-	s3_bucket_name = os.Getenv("AWS_BUCKET_NAME")
-
 	defer ch.Close()
 	defer rabbitConn.Close()
 	defer cancel()
@@ -104,43 +101,15 @@ func main() {
 		// Generate a UUID for the jobID
 		jobID := uuid.New().String()
 
-		// Generate a new filename with the UUID
-		newFileName := generateNewFileName(file, jobID)
-		imagePath := "./uploads/" + newFileName
-		key := "uploads/" + newFileName
+		imagePath := "./uploads/" + file.Filename
 
-		// Generate presign URLs to upload and download the image
-		ImageDownloadURL, ImageUploadURL, err := aws_utils.GeneratePresignedURL(s3_bucket_name, key, 15*time.Minute)
-		if err != nil {
-			c.String(http.StatusInternalServerError, fmt.Sprintf("failed to generate download pre-signed URL: %s", err.Error()))
-			return
-		}
-
-		// Generate presign URL for translation worker to upload the pdf
-		out_key := "output/" + jobID + ".pdf"
-		PDFUploadURL, err := aws_utils.GenerateUploadURL(s3_bucket_name, out_key, 15*time.Minute)
-
-		// Stream the image file to S3 using the pre-signed URL
-		src, err := file.Open()
-		if err != nil {
-			c.String(http.StatusInternalServerError, fmt.Sprintf("file open err: %s", err.Error()))
-			return
-		}
-		defer src.Close()
-		err = aws_utils.UploadStream(src, ImageUploadURL)
-
-		if err != nil {
-			c.String(http.StatusInternalServerError, fmt.Sprintf("upload to S3 failed: %s", err.Error()))
-			return
-		}
-
-		
+		c.SaveUploadedFile(file, imagePath)
 
 		// Create a new job
 		job := &models.Job{
 			ImagePath: imagePath,
-			ImageDownloadURL: ImageDownloadURL,
-			PDFUploadURL: PDFUploadURL,
+			ImageDownloadURL: "",
+			PDFUploadURL: "",
 			JobID:     jobID,
 			SubmittedAt: time.Now(),
 		}
@@ -201,32 +170,6 @@ func main() {
 
 		c.Header("Content-Disposition", "attachment; filename="+filename)
 		c.File(filePath)
-	})
-
-	r.GET("/storage/:filename", func(c *gin.Context) {
-		filename := c.Param("filename")
-		filePath := "./uploads/" + filename
-
-		c.Header("Content-Disposition", "attachment; filename="+filename)
-		c.File(filePath)
-	})
-
-	r.GET("/cloud_download/:filename", func(c *gin.Context) {
-		filename := c.Param("filename")
-		// Generate a presigned URL for downloading the file
-		filePath := "output/" + filename
-		url, err := aws_utils.GenerateDownloadURL(s3_bucket_name, filePath, 15*time.Minute)
-		if err != nil {
-			c.JSON(500, gin.H{"error": "Failed to generate presigned URL"})
-			return
-		}
-
-		log.Printf("Generated presigned URL: %s", url)
-
-		// Return the URL to the client
-		c.JSON(200, gin.H{
-			"url": url,
-		})
 	})
 
 

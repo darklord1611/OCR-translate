@@ -56,10 +56,16 @@ func main() {
 
 	initRedis()
 
-	var req_count int = 0
 	channel, err := conn.Channel()
 	failOnError(err, "Failed to open a channel")
 	defer channel.Close()
+
+	err = channel.Qos(
+		5,     // prefetch count
+		0,     // prefetch size
+		false, // global
+	)
+	failOnError(err, "Failed to set QoS")
 
 	translate_queue, err := initQueue(channel, "translation-queue")
 	failOnError(err, "Failed to declare a queue")
@@ -72,7 +78,6 @@ func main() {
 
 	go func() {
 		for d := range msgs {
-			req_count++
 			var job models.Job
 			err := json.Unmarshal(d.Body, &job)
 			failOnError(err, "Failed to unmarshal job")
@@ -94,7 +99,7 @@ func main() {
 			err = redisClient.HSet(redisCtx, job.JobID, data).Err()
 			failOnError(err, "Failed to set response time Redis")
 
-			log.Printf("Request %vth Total processing time: %v", req_count, job.ResponseTime)
+			log.Printf("Total processing time: %v", job.ResponseTime)
 
 		}
 	}()
@@ -180,9 +185,14 @@ func processMessage(job *models.Job) (string, error) {
 	translatedText := translation.TranslateFilter(job.ExtractedText)
 	job.TranslatedText = translatedText
 
-	// OutFilePath, err := pdf.ExportPDF(job.TranslatedText, job.JobID, margins)
+	var OutFilePath string
+	var err error
+	if job.PDFUploadURL != "" {
+		OutFilePath, err = pdf.ExportPDFtoS3(job.TranslatedText, job.JobID, margins, job.PDFUploadURL)
+	} else {
+		OutFilePath, err = pdf.ExportPDF(job.TranslatedText, job.JobID, margins)
+	}
 
-	OutFilePath, err := pdf.ExportPDFtoS3(job.TranslatedText, job.JobID, margins, job.PDFUploadURL)
 
 	if err != nil {
 		return OutFilePath, fmt.Errorf("failed to generate PDF: %w", err)

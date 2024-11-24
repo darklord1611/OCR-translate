@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"encoding/json"
 	"backend/pkg/ocr"
@@ -37,12 +36,12 @@ func main() {
 	failOnError(err, "Failed to open a channel")
 	defer channel.Close()
 
-	err = channel.Qos(
-		1,     // prefetch count
-		0,     // prefetch size
-		false, // global
-	)
-	failOnError(err, "Failed to set QoS")
+	// err = channel.Qos(
+	// 	3,     // prefetch count
+	// 	0,     // prefetch size
+	// 	true, // global
+	// )
+	// failOnError(err, "Failed to set QoS")
 
 	ocr_queue, err := initQueue(channel, "ocr-queue")
 	failOnError(err, "Failed to declare a queue")
@@ -56,7 +55,6 @@ func main() {
 
 	go func() {
 		for d := range msgs {
-			start_time := time.Now()
 			var job models.Job
 			err := json.Unmarshal(d.Body, &job)
 			failOnError(err, "Failed to unmarshal job")
@@ -71,7 +69,6 @@ func main() {
 			req_count++
 			log.Printf("Processed %dth requests", req_count)
 			publishMessage(channel, "translation-queue", new_msg)
-			log.Printf("OCR job completed in %v", time.Since(start_time))
 		}
 	}()
 
@@ -149,8 +146,10 @@ func processMessage(job *models.Job, mode string) error {
 	var text string
 	var err error
 
-	err = aws_utils.DownloadFile(job.ImageDownloadURL, job.ImagePath)
-	
+	if job.ImageDownloadURL != "" {
+		err = aws_utils.DownloadFile(job.ImageDownloadURL, job.ImagePath)
+	}
+
 	text, err = ocr.OCRFilter(job.ImagePath)
 
 	if err != nil {

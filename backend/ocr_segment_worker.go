@@ -12,6 +12,7 @@ import (
 	"backend/pkg/segmentation"
 	"backend/models"
 	"github.com/joho/godotenv"
+	"backend/pkg/aws_utils"
 )
 
 
@@ -146,8 +147,12 @@ func consumeMessage(channel *amqp.Channel, queueName string) (<-chan amqp.Delive
 
 func processMessage(job *models.Job, mode string) error {
 
+	err := aws_utils.DownloadFile(job.ImageDownloadURL, job.ImagePath)
+	if err != nil {
+		return fmt.Errorf("failed to download image: %w", err)
+	}
 	segmentPaths := segmentation.SplitImage(job.ImagePath, job.JobID)
-	text, err := ocr.OCRFilterConcurrent(segmentPaths)
+	text, err = ocr.OCRFilterConcurrent(segmentPaths)
 
 	if err != nil {
 		return fmt.Errorf("failed to process image: %w", err)
