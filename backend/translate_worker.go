@@ -13,6 +13,7 @@ import (
 	"backend/models"
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
+	"github.com/shirou/gopsutil/cpu"
 )
 
 var margins = map[string]float64{
@@ -60,12 +61,12 @@ func main() {
 	failOnError(err, "Failed to open a channel")
 	defer channel.Close()
 
-	err = channel.Qos(
-		5,     // prefetch count
-		0,     // prefetch size
-		false, // global
-	)
-	failOnError(err, "Failed to set QoS")
+	// err = channel.Qos(
+	// 	5,     // prefetch count
+	// 	0,     // prefetch size
+	// 	false, // global
+	// )
+	// failOnError(err, "Failed to set QoS")
 
 	translate_queue, err := initQueue(channel, "translation-queue")
 	failOnError(err, "Failed to declare a queue")
@@ -73,7 +74,8 @@ func main() {
 	msgs, err := consumeMessage(channel, translate_queue.Name)
 	failOnError(err, "Failed to register a consumer")
 
-
+	// go monitorCPUUsage(channel)
+	
 	var forever chan struct{}
 
 	go func() {
@@ -169,7 +171,7 @@ func consumeMessage(channel *amqp.Channel, queueName string) (<-chan amqp.Delive
 	msgs, err := channel.Consume(
 		queueName, // queue
 		"",        // consumer
-		true,      // auto-ack
+		false,      // auto-ack
 		false,     // exclusive
 		false,     // no-local
 		false,     // no-wait
@@ -199,6 +201,38 @@ func processMessage(job *models.Job) (string, error) {
 	}
 	
 	return OutFilePath, nil
+}
+
+
+func monitorCPUUsage(channel *amqp.Channel) {
+	for {
+		// Get the current CPU usage as a percentage
+		usage, err := cpu.Percent(0, false)
+		if err != nil {
+			log.Printf("Error fetching CPU usage: %v", err)
+			continue
+		}
+
+		// Adjust QoS based on CPU usage
+		currentUsage := usage[0]
+		var prefetchCount int
+		if currentUsage < 50 {
+			prefetchCount = 5 // Low CPU usage: allow up to 5 messages
+		} else if currentUsage < 80 {
+			prefetchCount = 2 // Medium CPU usage: allow up to 2 messages
+		} else {
+			prefetchCount = 1 // High CPU usage: allow only 1 message
+		}
+
+		// Set the new QoS
+		err = channel.Qos(prefetchCount, 0, true)
+		if err != nil {
+			log.Printf("Error setting QoS: %v", err)
+		}
+
+		// Wait for a few seconds before checking again
+		time.Sleep(5 * time.Second)
+	}
 }
  
 
