@@ -9,9 +9,9 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"encoding/json"
 	"backend/pkg/ocr"
-	"backend/pkg/segmentation"
 	"backend/models"
 	"github.com/joho/godotenv"
+	"backend/pkg/aws_utils"
 )
 
 
@@ -148,15 +148,10 @@ func processMessage(job *models.Job, mode string) error {
 
 	var text string
 	var err error
-	if mode == "SPLIT_IMAGE" {
-		segmentPaths := segmentation.SplitImage(job.ImagePath, job.JobID)
-		text, err = ocr.OCRFilterConcurrent(segmentPaths)
-	} else if mode == "ONE_SHOT" {
-		text, err = ocr.OneShotOCR(job.ImagePath)
-	} else if mode == "CLIENT_POOL" {
-		text, err = ocr.OCRFilter(job.ImagePath)
-	}
 
+	err = aws_utils.DownloadFile(job.ImageDownloadURL, job.ImagePath)
+	
+	text, err = ocr.OCRFilter(job.ImagePath)
 
 	if err != nil {
 		return fmt.Errorf("failed to process image: %w", err)
@@ -164,5 +159,4 @@ func processMessage(job *models.Job, mode string) error {
 	job.ExtractedText = text
 	return nil
 }
-
 

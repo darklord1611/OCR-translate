@@ -180,7 +180,10 @@ func processMessage(job *models.Job) (string, error) {
 	translatedText := translation.TranslateFilter(job.ExtractedText)
 	job.TranslatedText = translatedText
 
-	OutFilePath, err := pdf.ExportPDF(job.TranslatedText, job.JobID, margins)
+	// OutFilePath, err := pdf.ExportPDF(job.TranslatedText, job.JobID, margins)
+
+	OutFilePath, err := pdf.ExportPDFtoS3(job.TranslatedText, job.JobID, margins, job.PDFUploadURL)
+
 	if err != nil {
 		return OutFilePath, fmt.Errorf("failed to generate PDF: %w", err)
 	}
