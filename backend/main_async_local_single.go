@@ -18,6 +18,7 @@ import (
 	"backend/pkg/rabbitmq"
 	"backend/pkg/redis"
 	"backend/pkg/utils"
+	"flag"
 )
 
 var redisClient *redis.Client
@@ -59,6 +60,12 @@ func main() {
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
+
+
+	var port string
+	flag.StringVar(&port, "port", os.Getenv("MQ_ASYNC_PORT"), "port number")
+
+	flag.Parse()
 
 	ch, err := initRabbitMQ()
 	rabbitmq_utils.FailOnError(err, "Failed to connect to RabbitMQ")
@@ -224,8 +231,8 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"average_request_processing_time": avgTime, "total_requests": totalReq})
 	})
 
-	port := ":" + os.Getenv("MQ_ASYNC_PORT")
-	r.Run(port)
+	exposed_port := ":" + port
+	r.Run(exposed_port)
 }
 
 
