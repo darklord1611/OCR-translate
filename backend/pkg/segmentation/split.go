@@ -10,17 +10,19 @@ import (
 	"os"
 )
 
+var SPACE_THRESHOLD = 200
+
 // splitImage chia ảnh thành nhiều đoạn văn bản nhỏ
 func SplitImage(filePath string, prefix string) []string {
 	imgFile, err := os.Open(filePath)
 	if err != nil {
-		log.Fatal("Không thể mở ảnh:", err)
+		log.Fatal("Can not open the image:", filePath)
 	}
 	defer imgFile.Close()
 
 	img, _, err := image.Decode(imgFile)
 	if err != nil {
-		log.Fatal("Không thể decode ảnh:", err)
+		log.Fatal("Can not decode the image: ", filePath, "   Error: ", err)
 	}
 
 	grayImg := convertToGray(img)
@@ -43,6 +45,7 @@ func findParagraphs(grayImg *image.Gray) []image.Image {
 	bounds := grayImg.Bounds()
 	width, height := bounds.Max.X, bounds.Max.Y
 
+	startPosition := 0
 	sequenceLimit := 22
 	var Density = make([]int, height)
 	for y := 0; y < height; y++ {
@@ -60,8 +63,9 @@ func findParagraphs(grayImg *image.Gray) []image.Image {
 		if Density[line] == Density[line-1] {
 			count++
 		} else {
-			if count >= sequenceLimit {
+			if count >= sequenceLimit && line-startPosition >= SPACE_THRESHOLD {
 				splitPosition = append(splitPosition, line)
+				startPosition = line
 			}
 			count = 0
 		}

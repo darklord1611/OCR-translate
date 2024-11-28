@@ -149,7 +149,7 @@ func DownloadFile(downloadURL, destinationPath string) error {
 	return nil
 }
 
-// 3 URLs for one job, 1 URL for upload, 1 URL for download 
+// 2 URLs for one job, 1 URL for upload, 1 URL for download 
 
 func GeneratePresignedURL(bucket, key string, expiration time.Duration) (string, string, error) {
 	svc := s3.New(globalS3Session)

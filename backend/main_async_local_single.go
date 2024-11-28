@@ -12,43 +12,43 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 	"backend/pkg/aws_utils"
-	"mime/multipart"
-	"path/filepath"
+	"backend/pkg/rabbitmq"
+	"backend/pkg/redis"
+	"backend/pkg/utils"
 )
 
 var redisClient *redis.Client
-var redisCtx = context.Background()
+var redisCtx context.Context
 var rabbitConn *amqp.Connection
 var s3_bucket_name string
 
 // Retrieve the average response time from Redis
-func getAverageResponseTime() (float64, error) {
+func getAverageResponseTime() (int64, float64, error) {
 	// Retrieve updated total response time and total requests
 	totalResponseTime, err := redisClient.Get(redisCtx, "total_response_time").Float64()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get total response time: %v", err)
+		return 0, 0, fmt.Errorf("failed to get total response time: %v", err)
 	}
 
 	totalRequests, err := redisClient.Get(redisCtx, "total_requests").Int64()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get total requests: %v", err)
+		return 0, 0, fmt.Errorf("failed to get total requests: %v", err)
 	}
 
 	if err == redis.Nil {
-		// Return 0 if the key doesn't exist
-		return 0, nil
+		// Return 0, 0 if the key doesn't exist
+		return 0, 0, nil
 	} else if err != nil {
-		return 0, fmt.Errorf("failed to get average response time: %v", err)
+		return 0, 0, fmt.Errorf("failed to get average response time: %v", err)
 	}
 
 	// Calculate the average
 	average := totalResponseTime / float64(totalRequests)
 
-	return average, nil
+	return totalRequests, average, nil
 }
 
 
@@ -61,11 +61,11 @@ func main() {
 	}
 
 	ch, err := initRabbitMQ()
-	failOnError(err, "Failed to connect to RabbitMQ")
+	rabbitmq_utils.FailOnError(err, "Failed to connect to RabbitMQ")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 
 	// Initialize Redis client
-	initRedis()
+	redisClient, redisCtx = redis_utils.InitRedis(false)
 
 	defer ch.Close()
 	defer rabbitConn.Close()
@@ -97,20 +97,35 @@ func main() {
 			c.String(http.StatusBadRequest, fmt.Sprintf("get file err: %s", err.Error()))
 			return
 		}
+		// compute the hash key for the file
+		hash, err := utils.GenerateHashFromFormFile(file)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate hash"})
+			return
+		}
 
-		// Generate a UUID for the jobID
-		jobID := uuid.New().String()
+		// check if the file content is already processed?
+		
+		status, err := redisClient.HGet(redisCtx, hash, "status").Result()
 
+		if err == nil && status != "" {
+			// Respond with a success message
+			c.JSON(200, gin.H{"message": "Job submitted", "jobID": hash})
+			return
+		}
+
+		// save the file to local for further processing
 		imagePath := "./uploads/" + file.Filename
-
 		c.SaveUploadedFile(file, imagePath)
 
+
+		
 		// Create a new job
 		job := &models.Job{
 			ImagePath: imagePath,
 			ImageDownloadURL: "",
 			PDFUploadURL: "",
-			JobID:     jobID,
+			JobID:     hash,
 			SubmittedAt: time.Now(),
 		}
 
@@ -142,7 +157,7 @@ func main() {
 		}
 
 		// Respond with a success message
-		c.JSON(200, gin.H{"message": "Job submitted", "jobID": jobID})
+		c.JSON(200, gin.H{"message": "Job submitted", "jobID": hash})
 	})
 
 	// Status endpoint
@@ -200,23 +215,17 @@ func main() {
 
 	// Endpoint to get average response time
 	r.GET("/average-response-time", func(c *gin.Context) {
-		avgTime, err := getAverageResponseTime()
+		totalReq, avgTime, err := getAverageResponseTime()
 		if err != nil {
 			log.Printf("Failed to calculate average response time: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to calculate average response time"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"average_request_processing_time": avgTime})
+		c.JSON(http.StatusOK, gin.H{"average_request_processing_time": avgTime, "total_requests": totalReq})
 	})
 
 	port := ":" + os.Getenv("MQ_ASYNC_PORT")
 	r.Run(port)
-}
-
-func failOnError(err error, msg string) {
-	if err != nil {
-		log.Panicf("%s: %s", msg, err)
-	}
 }
 
 
@@ -242,7 +251,7 @@ func initRabbitMQ() (*amqp.Channel, error) {
 	)
 	fmt.Println(q.Name)
 
-	failOnError(err, "Failed to declare translation queue")
+	rabbitmq_utils.FailOnError(err, "Failed to declare translation queue")
 
 	q, err = ch.QueueDeclare(
 		"ocr-queue", // name
@@ -252,67 +261,12 @@ func initRabbitMQ() (*amqp.Channel, error) {
 		false,   // no-wait
 		nil,     // arguments
 	)
-	failOnError(err, "Failed to declare ocr queue")
+	rabbitmq_utils.FailOnError(err, "Failed to declare ocr queue")
 
 	return ch, nil
-}
-
-func initRedis() {
-	redisClient = redis.NewClient(&redis.Options{
-		Addr:     os.Getenv("REDIS_CONNECTION"), // Redis connection string
-		Password: "",                            // No password set
-		DB:       0,                             // Use default DB
-	})
-
-	removeAllHashKeys("*")
 }
 
 
 func initS3() {
 	aws_utils.InitS3Session(os.Getenv("AWS_REGION"), os.Getenv("AWS_ACCESS_KEY_ID"), os.Getenv("AWS_SECRET_ACCESS_KEY"))
-}
-
-// Remove all hash keys
-func removeAllHashKeys(pattern string) error {
-	// Find keys matching the pattern
-	keys, err := redisClient.Keys(redisCtx, pattern).Result()
-	if err != nil {
-		return fmt.Errorf("failed to fetch keys: %v", err)
-	}
-
-	if len(keys) == 0 {
-		log.Println("No keys match the given pattern")
-		return nil
-	}
-
-	// Delete the keys
-	deletedCount, err := redisClient.Del(redisCtx, keys...).Result()
-	if err != nil {
-		return fmt.Errorf("failed to delete keys: %v", err)
-	}
-
-	log.Printf("Deleted %d keys matching the pattern '%s'", deletedCount, pattern)
-	return nil
-}
-
-// Function to generate a new filename with UUID appended before the extension
-func generateNewFileName(file *multipart.FileHeader, uuid string) string {
-
-	// Extract the base name and extension
-	baseName := file.Filename[:len(file.Filename)-len(filepath.Ext(file.Filename))]
-	ext := filepath.Ext(file.Filename)
-
-	// Append the UUID to the base name
-	newFileName := fmt.Sprintf("%s-%s%s", baseName, uuid, ext)
-
-	return newFileName
-}
-
-func addExtensionToFile(filename, ext string) string {
-	// Get the file name without extension
-	extExisting := filepath.Ext(filename)
-	baseName := filename[:len(filename)-len(extExisting)]
-
-	// Add the new extension
-	return baseName + ext
 }

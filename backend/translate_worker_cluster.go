@@ -21,7 +21,7 @@ var margins = map[string]float64{
 	"right": 30,
 }
 
-var redisClient *redis.Client
+var redisClient *redis.ClusterClient
 var redisCtx context.Context
 
 
@@ -54,7 +54,7 @@ func main() {
 	rabbitmq_utils.FailOnError(err, "Failed to connect to RabbitMQ")
 	defer conn.Close()
 
-	redisClient, redisCtx = redis_utils.InitRedis(false)
+	redisClient, redisCtx = redis_utils.InitRedisCluster(false)
 
 	channel, err := conn.Channel()
 	rabbitmq_utils.FailOnError(err, "Failed to open a channel")
