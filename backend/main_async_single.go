@@ -24,7 +24,13 @@ import (
 var redisClient *redis.Client
 var redisCtx context.Context
 var rabbitConn *amqp.Connection
-var s3_bucket_name string
+
+var (
+	s3_bucket_name string
+	ImageDownloadURL string
+	ImageUploadURL string
+	PDFUploadURL string
+)
 
 // Retrieve the average response time from Redis
 func getAverageResponseTime() (int64, float64, error) {
@@ -61,10 +67,12 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
-
 	var port string
-	flag.StringVar(&port, "port", os.Getenv("MQ_ASYNC_PORT"), "port number")
 
+	var storage_type string
+
+	flag.StringVar(&port, "port", os.Getenv("MQ_ASYNC_PORT"), "port number")
+	flag.StringVar(&storage_type, "storage", "local", "storage type")
 	flag.Parse()
 
 	ch, err := initRabbitMQ()
@@ -73,6 +81,13 @@ func main() {
 
 	// Initialize Redis client
 	redisClient, redisCtx = redis_utils.InitRedis(false)
+
+	if storage_type == "s3" {
+		initS3()
+		s3_bucket_name = os.Getenv("AWS_BUCKET_NAME")
+	}
+
+	log.Printf("Storage type: %s", storage_type)
 
 	defer ch.Close()
 	defer rabbitConn.Close()
@@ -121,17 +136,50 @@ func main() {
 			return
 		}
 
-		// save the file to local for further processing
-		imagePath := "./uploads/" + file.Filename
-		c.SaveUploadedFile(file, imagePath)
+		var imagePath string
 
+		if storage_type == "local" {
+			// save the file to local for further processing
+			imagePath = "./uploads/" + file.Filename
+			c.SaveUploadedFile(file, imagePath)
+		} else {
+			// save the file to S3 for further processing
+			log.Printf("Uploading file to S3")
+			newFileName := utils.GenerateNewFileName(file, hash)
+			imagePath = "./uploads/" + newFileName
+			key := "uploads/" + newFileName
 
-		
+			// Generate presign URLs to upload and download the image
+			ImageDownloadURL, ImageUploadURL, err = aws_utils.GeneratePresignedURL(s3_bucket_name, key, 15*time.Minute)
+			if err != nil {
+				c.String(http.StatusInternalServerError, fmt.Sprintf("failed to generate download pre-signed URL: %s", err.Error()))
+				return
+			}
+
+			// Generate presign URL for translation worker to upload the pdf
+			out_key := "output/" + hash + ".pdf"
+			PDFUploadURL, err = aws_utils.GenerateUploadURL(s3_bucket_name, out_key, 15*time.Minute)
+
+			// Stream the image file to S3 using the pre-signed URL
+			src, err := file.Open()
+			if err != nil {
+				c.String(http.StatusInternalServerError, fmt.Sprintf("file open err: %s", err.Error()))
+				return
+			}
+			defer src.Close()
+			err = aws_utils.UploadStream(src, ImageUploadURL)
+
+			if err != nil {
+				c.String(http.StatusInternalServerError, fmt.Sprintf("upload to S3 failed: %s", err.Error()))
+				return
+			}
+		}
+
 		// Create a new job
 		job := &models.Job{
 			ImagePath: imagePath,
-			ImageDownloadURL: "",
-			PDFUploadURL: "",
+			ImageDownloadURL: ImageDownloadURL,
+			PDFUploadURL: PDFUploadURL,
 			JobID:     hash,
 			SubmittedAt: time.Now(),
 		}
@@ -192,6 +240,20 @@ func main() {
 
 		c.Header("Content-Disposition", "attachment; filename="+filename)
 		c.File(filePath)
+	})
+
+	// Serve file endpoint
+	r.GET("/cloud_download/:filename", func(c *gin.Context) {
+		filename := c.Param("filename")
+		filePath := "./output/" + filename
+
+		presignedURL, err := aws_utils.GenerateDownloadURL(s3_bucket_name, filePath, 15*time.Minute)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		// Redirect the client to the presigned URL
+		c.Redirect(http.StatusTemporaryRedirect, presignedURL)
 	})
 
 
