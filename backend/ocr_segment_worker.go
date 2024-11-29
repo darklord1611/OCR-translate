@@ -9,10 +9,10 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"encoding/json"
 	"backend/pkg/ocr"
+	"backend/pkg/segmentation"
 	"backend/models"
 	"github.com/joho/godotenv"
 	"backend/pkg/aws_utils"
-	"github.com/shirou/gopsutil/cpu"
 )
 
 
@@ -23,7 +23,7 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
-	mode := "CLIENT_POOL"
+	mode := "SPLIT_IMAGE"
 
 	if mode == "CLIENT_POOL" {
 		ocr.Initialize()
@@ -38,13 +38,18 @@ func main() {
 	failOnError(err, "Failed to open a channel")
 	defer channel.Close()
 
+	err = channel.Qos(
+		1,     // prefetch count
+		0,     // prefetch size
+		false, // global
+	)
+	failOnError(err, "Failed to set QoS")
+
 	ocr_queue, err := initQueue(channel, "ocr-queue")
 	failOnError(err, "Failed to declare a queue")
 
 	msgs, err := consumeMessage(channel, ocr_queue.Name)
 	failOnError(err, "Failed to register a consumer")
-
-	// go monitorCPUUsage(channel)
 
 	var req_count int = 0
 
@@ -52,6 +57,7 @@ func main() {
 
 	go func() {
 		for d := range msgs {
+			start_time := time.Now()
 			var job models.Job
 			err := json.Unmarshal(d.Body, &job)
 			failOnError(err, "Failed to unmarshal job")
@@ -66,6 +72,7 @@ func main() {
 			req_count++
 			log.Printf("Processed %dth requests", req_count)
 			publishMessage(channel, "translation-queue", new_msg)
+			log.Printf("OCR job completed in %v", time.Since(start_time))
 		}
 	}()
 
@@ -126,7 +133,7 @@ func consumeMessage(channel *amqp.Channel, queueName string) (<-chan amqp.Delive
 	msgs, err := channel.Consume(
 		queueName, // queue
 		"",        // consumer
-		false,      // auto-ack
+		true,      // auto-ack
 		false,     // exclusive
 		false,     // no-local
 		false,     // no-wait
@@ -140,14 +147,12 @@ func consumeMessage(channel *amqp.Channel, queueName string) (<-chan amqp.Delive
 
 func processMessage(job *models.Job, mode string) error {
 
-	var text string
-	var err error
-
-	if job.ImageDownloadURL != "" {
-		err = aws_utils.DownloadFile(job.ImageDownloadURL, job.ImagePath)
+	err := aws_utils.DownloadFile(job.ImageDownloadURL, job.ImagePath)
+	if err != nil {
+		return fmt.Errorf("failed to download image: %w", err)
 	}
-
-	text, err = ocr.OCRFilter(job.ImagePath)
+	segmentPaths := segmentation.SplitImage(job.ImagePath, job.JobID)
+	text, err = ocr.OCRFilterConcurrent(segmentPaths)
 
 	if err != nil {
 		return fmt.Errorf("failed to process image: %w", err)
@@ -157,33 +162,3 @@ func processMessage(job *models.Job, mode string) error {
 }
 
 
-func monitorCPUUsage(channel *amqp.Channel) {
-	for {
-		// Get the current CPU usage as a percentage
-		usage, err := cpu.Percent(0, false)
-		if err != nil {
-			log.Printf("Error fetching CPU usage: %v", err)
-			continue
-		}
-
-		// Adjust QoS based on CPU usage
-		currentUsage := usage[0]
-		var prefetchCount int
-		if currentUsage < 50 {
-			prefetchCount = 5 // Low CPU usage: allow up to 5 messages
-		} else if currentUsage < 80 {
-			prefetchCount = 2 // Medium CPU usage: allow up to 2 messages
-		} else {
-			prefetchCount = 1 // High CPU usage: allow only 1 message
-		}
-
-		// Set the new QoS
-		err = channel.Qos(prefetchCount, 0, true)
-		if err != nil {
-			log.Printf("Error setting QoS: %v", err)
-		}
-
-		// Wait for a few seconds before checking again
-		time.Sleep(5 * time.Second)
-	}
-}

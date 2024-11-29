@@ -4,35 +4,32 @@ Install [go](https://go.dev/doc/install)
 
 Install [locust](https://locust.io/)
 
+
+Create .env file from .env.example, setup AWS credentials
+
 ```sh
 # Cài đặt các gói liên quan
 $ go mod tidy
 ```
 
-## V1: Single Queue + Split-Image
+## V1: Sync Request
 ```sh
-$ go run main.go
+$ go run main_sync.go
 ```
 
-## V2: Multiple Queues
+## V2: Async + Message Queue
 ```sh
-$ go run main_2.go
-```
+$ docker compose up -d redis rabbitmq
 
-## V3: Multiple Queues(RabbitMQ)
-Create .env file from .env.example
-```sh
-$ docker-compose up
-
-$ go run main_3.go
+$ go run main_async.go
 
 # New terminal
-$ go run ocr_worker.go
+$ source start_multiple_ocr_worker.sh ${number_of_workers}
 
 # New terminal
-$ go run translate_worker.go
-```
+$ source start_multiple_translate_worker.sh ${number_of_workers}
 
+```
 
 ```sh
 # Benchmark
