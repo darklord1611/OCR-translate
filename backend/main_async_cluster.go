@@ -71,7 +71,7 @@ func main() {
 
 	var storage_type string
 
-	flag.StringVar(&port, "port", os.Getenv("MQ_ASYNC_PORT"), "port number")
+	flag.StringVar(&port, "port", os.Getenv("DEFAULT_PORT"), "port number")
 	flag.StringVar(&storage_type, "storage", "local", "storage type")
 	flag.Parse()
 

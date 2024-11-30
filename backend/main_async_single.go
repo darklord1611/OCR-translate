@@ -18,6 +18,7 @@ import (
 	"backend/pkg/rabbitmq"
 	"backend/pkg/redis"
 	"backend/pkg/utils"
+	"backend/middleware"
 	"flag"
 )
 
@@ -70,9 +71,11 @@ func main() {
 	var port string
 
 	var storage_type string
+	var use_cache string
 
-	flag.StringVar(&port, "port", os.Getenv("MQ_ASYNC_PORT"), "port number")
+	flag.StringVar(&port, "port", os.Getenv("DEFAULT_PORT"), "port number")
 	flag.StringVar(&storage_type, "storage", "local", "storage type")
+	flag.StringVar(&use_cache, "use_cache", "no", "storage type")
 	flag.Parse()
 
 	ch, err := initRabbitMQ()
@@ -88,6 +91,7 @@ func main() {
 	}
 
 	log.Printf("Storage type: %s", storage_type)
+	log.Printf("Use cache: %s", use_cache)
 
 	defer ch.Close()
 	defer rabbitConn.Close()
@@ -128,12 +132,15 @@ func main() {
 
 		// check if the file content is already processed?
 		
-		status, err := redisClient.HGet(redisCtx, hash, "status").Result()
+		if use_cache == "yes" {
 
-		if err == nil && status != "" {
-			// Respond with a success message
-			c.JSON(200, gin.H{"message": "Job submitted", "jobID": hash})
-			return
+			status, err := redisClient.HGet(redisCtx, hash, "status").Result()
+
+			if err == nil && status != "" {
+				// Respond with a success message
+				c.JSON(200, gin.H{"message": "Job submitted", "jobID": hash})
+				return
+			}
 		}
 
 		var imagePath string
@@ -258,7 +265,7 @@ func main() {
 
 
 	// Health check endpoint
-	r.GET("/health", func(c *gin.Context) {
+	r.GET("/health", middleware.RateLimiterMiddleware(0.2, 1), func(c *gin.Context) {
 		healthStatus := map[string]string{
 			"redis":     "ok",
 			"rabbitmq":  "ok",

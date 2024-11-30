@@ -3,9 +3,32 @@
 import time
 from locust import FastHttpUser, task, between, HttpUser, tag
 import random
+import requests
+import os
 from time import perf_counter
 
-sample_images = ["images/small-len-paragraph.PNG", "images/M-1.png", "images/L-1.png", "images/S-1.png", "images/medium-len-paragraph.PNG", "images/large-len-paragraph.PNG", "images/sample.png"]
+
+# Define the path to the directory containing images
+image_directory = "./images"
+
+# Get all files from the directory
+all_images = [f for f in os.listdir(image_directory) if f.lower().endswith((".png", ".jpg", ".jpeg"))]
+
+# Categorize images into groups based on prefixes
+image_groups = {"L": [], "M": [], "S": []}
+for image in all_images:
+    prefix = image.split("-")[0].upper()  # Extract prefix (L, M, S) and normalize case
+    if prefix in image_groups:
+        image_groups[prefix].append(image)
+
+# Define weights for each group
+group_weights = {"L": 0.3, "M": 0.5, "S": 0.2}
+
+# Create a weighted list of images
+weighted_images = []
+for group, weight in group_weights.items():
+    weighted_images.extend(image_groups[group] * int(weight * 100))
+
 
 def _get_image_part(file_path):
     import os
@@ -21,8 +44,6 @@ class MyUser(HttpUser):
     @tag("upload")
     def upload_and_check_status(self):
         
-        start_time = time.time()
-        
         # Step 1: Upload a file
         payload = {
             "name": "John Doe",
@@ -30,10 +51,12 @@ class MyUser(HttpUser):
         }
         
         files = {
-            "file": _get_image_part(random.choice(sample_images))
+            "file": _get_image_part("images/" + random.choice(weighted_images))
         }
         
-        with self.client.post("/upload", data=payload, files=files, catch_response=True) as response:
+        start_time = time.time()
+        base_url = "https://8090-01j9vf08vxz2dsg2y5m0g74nxh.cloudspaces.litng.ai"
+        with requests.post(f"{base_url}/upload", data=payload, files=files) as response:
             if response.status_code != 200:
                 response.failure("File upload failed!")
                 return
@@ -46,10 +69,8 @@ class MyUser(HttpUser):
         # Step 2: Poll the status endpoint
         status = "pending"
         while status != "completed":
-            with self.client.get(f"/status/{job_id}", catch_response=True) as status_response:
-
+            with requests.get(f"{base_url}/status/{job_id}") as status_response:
                 status = status_response.json().get("status")
-
                 if status != "completed":
                     time.sleep(1)  # Wait before polling again
 
@@ -61,3 +82,4 @@ class MyUser(HttpUser):
             response_time=total_time * 1000,  # Convert to ms
             response_length=len(response.content),
         )
+

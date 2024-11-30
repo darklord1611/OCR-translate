@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 	"os"
-
+	"flag"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -60,6 +60,11 @@ func main() {
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
+
+	var port string
+
+	flag.StringVar(&port, "port", os.Getenv("DEFAULT_PORT"), "port number")
+	flag.Parse()
 
 	// Initialize the Tesseract client
 	ocr.Initialize()
@@ -177,9 +182,9 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"average_response_time": avgTime.Seconds()})
 	})
 
-	port := ":" + os.Getenv("SYNC_PORT")
+	exposed_port := ":" + port
 	// Start the server on port 8080
-	r.Run(port)
+	r.Run(exposed_port)
 }
 
 func worker(id int, jobs <-chan *models.Job) {
