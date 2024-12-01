@@ -18,7 +18,7 @@ import (
 	"backend/pkg/rabbitmq"
 	"backend/pkg/redis"
 	"backend/pkg/utils"
-	"backend/middleware"
+	_ "backend/middleware"
 	"flag"
 )
 
@@ -151,7 +151,6 @@ func main() {
 			c.SaveUploadedFile(file, imagePath)
 		} else {
 			// save the file to S3 for further processing
-			log.Printf("Uploading file to S3")
 			newFileName := utils.GenerateNewFileName(file, hash)
 			imagePath = "./uploads/" + newFileName
 			key := "uploads/" + newFileName
@@ -265,7 +264,7 @@ func main() {
 
 
 	// Health check endpoint
-	r.GET("/health", middleware.RateLimiterMiddleware(0.2, 1), func(c *gin.Context) {
+	r.GET("/health", func(c *gin.Context) {
 		healthStatus := map[string]string{
 			"redis":     "ok",
 			"rabbitmq":  "ok",
