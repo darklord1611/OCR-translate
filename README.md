@@ -1,6 +1,6 @@
 # OCR-Translate
 
-This repository contains the implementation of a distributed OCR (Optical Character Recognition) and translation system. The project is designed to process images containing text, extract the text using OCR, translate it into another language (currently configured for English to English), and generate a PDF with the translated text. The system is built with scalability, modularity, and performance in mind, leveraging modern software architecture principles and design patterns. It supports both local file storage and AWS S3 for image and PDF handling, and can run in synchronous or asynchronous modes with RabbitMQ and Redis.
+This repository contains the implementation of a distributed OCR (Optical Character Recognition) and translation system. The project is designed to process images containing text, extract the text using OCR, translate it into another language (currently configured for English to English), and generate a PDF with the translated text. The system is built with scalability, modularity, and performance in mind, leveraging modern software architecture principles and design patterns. It supports both local file storage and AWS S3 for image and PDF handling, and can run in synchronous or asynchronous modes with RabbitMQ and Redis. A detailed breakdown of our architecture is in this [report](https://drive.google.com/drive/folders/1RxtHRMFrynwl82qSLOLlymPj9uY5ZclV?usp=sharing).
 
 ---
 

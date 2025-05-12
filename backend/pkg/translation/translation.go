@@ -8,7 +8,7 @@ import (
 func TranslateFilter(text string) string {
 	// you can use "auto" for source language
 	// so, translator will detect language
-	result, _ := gt.Translate(text, "en", "vi")
+	result, _ := gt.Translate(text, "en", "en")
 	// Output: "Hola, Mundo!"
     return result
 }
